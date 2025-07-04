@@ -42,26 +42,45 @@ The script uses Chrome WebDriver, so you need Chrome or Chromium browser install
 
 ## Usage
 
-### Basic Usage (Downloads .m3u8 file)
+### Web Interface (Recommended)
+
+A beautiful web interface is available for easier use:
+
+```bash
+python3 start_web.py
+```
+
+Then open your browser to: `http://localhost:8080`
+
+**Features:**
+- Modern, responsive interface
+- Real-time download progress
+- Automatic file list refresh (no manual refresh needed!)
+- File management and download
+- WebSocket-based live updates
+
+### Command Line Interface
+
+#### Basic Usage (Downloads .m3u8 file)
 
 ```bash
 python kukaj_downloader.py <kukaj.fi_url>
 ```
 
-### Download as MP4
+#### Download as MP4
 
 ```bash
 python kukaj_downloader.py <kukaj.fi_url> --mp4
 ```
 
-### With Custom Output Filename
+#### With Custom Output Filename
 
 ```bash
 python kukaj_downloader.py <kukaj.fi_url> -o <output_filename>
 python kukaj_downloader.py <kukaj.fi_url> --mp4 -o <output_filename>
 ```
 
-### Examples
+#### Examples
 
 ```bash
 # Download .m3u8 file with automatic filename
@@ -84,7 +103,7 @@ python kukaj_downloader.py https://serial.kukaj.fi/hra-na-olihen/S03E04 --mp4 -o
 python kukaj_downloader.py https://serial.kukaj.fi/hra-na-olihen/S03E04 --no-headless
 ```
 
-### Command Line Options
+#### Command Line Options
 
 - `--mp4`: Convert to MP4 format (default: download .m3u8 file)
 - `-o`, `--output`: Specify output filename
@@ -111,20 +130,29 @@ python kukaj_downloader.py https://serial.kukaj.fi/hra-na-olihen/S03E04 --no-hea
 
 ### Common Issues
 
-1. **No .m3u8 URLs found**
+1. **ChromeDriver execution error** (NEW FIX!)
+   - If you see "Exec format error" or "Invalid ChromeDriver path", run:
+   ```bash
+   python3 fix_chromedriver.py
+   ```
+   This utility clears the WebDriver cache and reinstalls ChromeDriver properly.
+
+2. **No .m3u8 URLs found**
    - The page might need more time to load
    - Check if the URL is correct and accessible
    - Some pages might have anti-bot protection
+   - The script now has enhanced fallback mechanisms for difficult extractions
 
-2. **FFmpeg not found**
+3. **FFmpeg not found**
    - Install FFmpeg using the instructions above
    - The script will automatically fallback to Python download
 
-3. **Chrome driver issues**
+4. **Chrome driver issues**
    - The script automatically downloads ChromeDriver
    - Make sure Chrome/Chromium is installed
+   - Use the `fix_chromedriver.py` utility if you encounter path issues
 
-4. **Download fails**
+5. **Download fails**
    - Check your internet connection
    - The video might be geo-blocked
    - Try again as the issue might be temporary

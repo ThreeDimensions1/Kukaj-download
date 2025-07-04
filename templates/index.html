@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kukaj Video Downloader</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #6366f1;
+            --primary-hover: #5b5cf6;
+            --secondary-color: #f1f5f9;
+            --accent-color: #06b6d4;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --error-color: #ef4444;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8fafc;
+            --border-color: #e2e8f0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: var(--text-primary);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--bg-primary);
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            border: 1px solid var(--border-color);
+        }
+
+        .card h2 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: all 0.2s ease;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .checkbox {
+            width: 1.25rem;
+            height: 1.25rem;
+            accent-color: var(--primary-color);
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            justify-content: center;
+            min-width: 120px;
+        }
+
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: var(--secondary-color);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--primary-color);
+            color: white;
+            transform: translateY(-1px);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        /* History Section */
+        .history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .history-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .history-info {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .history-icon {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #fef3c7;
+            color: #d97706;
+            font-size: 0.875rem;
+        }
+
+        .history-icon.mp4 {
+            background: #dbeafe;
+            color: #2563eb;
+        }
+
+        .history-details h4 {
+            font-weight: 500;
+            margin-bottom: 0.25rem;
+            font-size: 0.9rem;
+        }
+
+        .history-meta {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .history-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .btn-small {
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+            min-width: auto;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 16px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+            transform: scale(0.9);
+            transition: transform 0.3s ease;
+        }
+
+        .modal-overlay.active .modal {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .modal-close {
+            width: 2rem;
+            height: 2rem;
+            border: none;
+            background: #f1f5f9;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            transition: all 0.2s ease;
+        }
+
+        .modal-close:hover {
+            background: #e2e8f0;
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+        }
+
+        .video-preview {
+            width: 100%;
+            height: 200px;
+            background: #000;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            color: white;
+        }
+
+        .video-preview .play-button {
+            width: 4rem;
+            height: 4rem;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: #333;
+        }
+
+        .video-preview .fullscreen-btn {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(0, 0, 0, 0.5);
+            border: none;
+            color: white;
+            padding: 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .video-preview .video-time {
+            position: absolute;
+            bottom: 1rem;
+            left: 1rem;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+        }
+
+        .video-preview .video-time-end {
+            position: absolute;
+            bottom: 1rem;
+            right: 1rem;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+        }
+
+        .download-actions {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            justify-content: center;
+        }
+        
+        .download-actions .btn {
+            min-width: 140px;
+            font-weight: 500;
+        }
+
+        .progress-section h4 {
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--primary-color);
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-text {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+
+        .loading-spinner {
+            border: 2px solid #f3f4f6;
+            border-top: 2px solid var(--primary-color);
+            border-radius: 50%;
+            width: 1rem;
+            height: 1rem;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .container {
+                padding: 1rem;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .card {
+                padding: 1.5rem;
+            }
+            
+            .modal {
+                width: 95%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-download"></i> Kukaj Video Downloader</h1>
+            <p>Download videos from kukaj.fi, kukaj.io, kukaj.in and other kukaj domains</p>
+        </div>
+
+        <div class="main-content">
+            <div class="card">
+                <h2><i class="fas fa-link"></i> Download Video</h2>
+                <form id="downloadForm">
+                    <div class="form-group">
+                        <label class="form-label" for="videoUrl">Video URL</label>
+                        <input type="url" 
+                               id="videoUrl" 
+                               class="form-input" 
+                               placeholder="https://serial.kukaj.fi/hra-na-olihen/S03E04"
+                               required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="filename">Custom Filename (Optional)</label>
+                        <input type="text" 
+                               id="filename" 
+                               class="form-input" 
+                               placeholder="my-video.m3u8">
+                    </div>
+                    
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="convertToMp4" class="checkbox">
+                        <label for="convertToMp4">Convert to MP4 (slower but more compatible)</label>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary" id="downloadBtn">
+                        <i class="fas fa-download"></i>
+                        <span>Download</span>
+                    </button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2><i class="fas fa-history"></i> History</h2>
+                <div class="history-list" id="historyList">
+                    <div class="empty-state">
+                        <i class="fas fa-history"></i>
+                        <p>No downloads yet</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Download Progress Modal -->
+    <div class="modal-overlay" id="downloadModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-link"></i>
+                    <span id="modalTitle">Download Video</span>
+                </div>
+                <button class="modal-close" onclick="closeModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="video-preview" id="videoPreview">
+                    <button class="play-button">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    <button class="fullscreen-btn">fullscreen</button>
+                    <div class="video-time">0:00</div>
+                    <div class="video-time-end">--:--</div>
+                </div>
+                
+                <div class="download-actions" id="downloadActions">
+                    <button class="btn btn-primary btn-small" id="downloadM3u8Btn" style="display: none;">
+                        <i class="fas fa-download"></i> Download m3u8
+                    </button>
+                    <button class="btn btn-primary btn-small" id="downloadMp4Btn" style="display: none;">
+                        <i class="fas fa-download"></i> Download mp4
+                    </button>
+                </div>
+                
+                <div class="progress-section">
+                    <h4 id="progressTitle">Progress 50%</h4>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">Converting to mp4... 66%</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script>
+        class KukajDownloader {
+            constructor() {
+                this.socket = io();
+                this.sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                this.isDownloading = false;
+                this.downloadHistory = [];
+                this.hls = null; // For HLS.js player
+                
+                this.form = document.getElementById('downloadForm');
+                this.urlInput = document.getElementById('videoUrl');
+                this.filenameInput = document.getElementById('filename');
+                this.convertCheckbox = document.getElementById('convertToMp4');
+                this.downloadBtn = document.getElementById('downloadBtn');
+                this.historyList = document.getElementById('historyList');
+                this.modal = document.getElementById('downloadModal');
+                this.progressFill = document.getElementById('progressFill');
+                this.progressText = document.getElementById('progressText');
+                this.progressTitle = document.getElementById('progressTitle');
+                
+                this.setupEventListeners();
+                this.loadHistory();
+            }
+            
+            setupEventListeners() {
+                this.form.addEventListener('submit', (e) => this.handleSubmit(e));
+                
+                // Join session room when connected
+                this.socket.on('connect', () => {
+                    this.socket.emit('join_session', { session_id: this.sessionId });
+                });
+                
+                this.socket.on('download_progress', (data) => {
+                    this.updateProgress(data.message, data.status);
+                });
+                
+                this.socket.on('download_complete', (data) => {
+                    this.isDownloading = false;
+                    this.updateDownloadButton();
+                    this.loadHistory();
+                    
+                    if (data.success) {
+                        this.updateProgress('✅ Download completed successfully!', 'success');
+                        this.progressFill.style.width = '100%';
+                        this.progressTitle.textContent = 'Progress 100%';
+                        
+                        // Wait a moment for file to be fully written, then update video preview
+                        setTimeout(() => {
+                            this.setupVideoPreviewFromFilename(data.filename);
+                        }, 1000);
+                    } else {
+                        this.updateProgress('❌ Download failed', 'error');
+                    }
+                });
+                
+                this.socket.on('download_error', (data) => {
+                    this.isDownloading = false;
+                    this.updateDownloadButton();
+                    this.updateProgress(`❌ Error: ${data.error}`, 'error');
+                });
+                
+                this.socket.on('files_updated', (data) => {
+                    this.loadHistory();
+                });
+            }
+            
+            async handleSubmit(e) {
+                e.preventDefault();
+                
+                if (this.isDownloading) return;
+                
+                const url = this.urlInput.value.trim();
+                const filename = this.filenameInput.value.trim();
+                const convertToMp4 = this.convertCheckbox.checked;
+                
+                if (!url) {
+                    alert('Please enter a video URL');
+                    return;
+                }
+                
+                if (!url.includes('kukaj.')) {
+                    alert('Please enter a valid kukaj URL');
+                    return;
+                }
+                
+                this.isDownloading = true;
+                this.updateDownloadButton();
+                this.showModal(url, filename, convertToMp4);
+                
+                try {
+                    const response = await fetch('/api/download', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            url: url,
+                            filename: filename,
+                            convert_to_mp4: convertToMp4,
+                            session_id: this.sessionId
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Download failed');
+                    }
+                    
+                    this.updateProgress('🚀 Download started...', 'info');
+                    
+                } catch (error) {
+                    this.isDownloading = false;
+                    this.updateDownloadButton();
+                    this.updateProgress(`❌ Error: ${error.message}`, 'error');
+                }
+            }
+            
+            showModal(url, filename, convertToMp4) {
+                const title = filename || this.extractVideoTitle(url);
+                document.getElementById('modalTitle').textContent = title;
+                this.modal.classList.add('active');
+                this.resetProgress();
+                this.setupVideoPreview(title, convertToMp4);
+            }
+            
+            setupVideoPreview(filename, convertToMp4) {
+                const videoPreview = document.getElementById('videoPreview');
+                const downloadM3u8Btn = document.getElementById('downloadM3u8Btn');
+                const downloadMp4Btn = document.getElementById('downloadMp4Btn');
+                
+                // Hide both buttons initially
+                downloadM3u8Btn.style.display = 'none';
+                downloadMp4Btn.style.display = 'none';
+                
+                // Check if file exists and set up preview accordingly
+                const baseFilename = filename.replace(/\.(m3u8|mp4)$/, '');
+                const m3u8Filename = `${baseFilename}.m3u8`;
+                const mp4Filename = `${baseFilename}.mp4`;
+                
+                Promise.all([
+                    fetch(`/api/file-info/${encodeURIComponent(m3u8Filename)}`).then(r => r.json()),
+                    fetch(`/api/file-info/${encodeURIComponent(mp4Filename)}`).then(r => r.json())
+                ]).then(([m3u8Data, mp4Data]) => {
+                    const hasM3u8 = m3u8Data.exists;
+                    const hasMp4 = mp4Data.exists;
+                    
+                    if (hasM3u8 || hasMp4) {
+                        // File exists - show video preview
+                        const fileToShow = hasMp4 ? mp4Filename : m3u8Filename;
+                        const videoType = hasMp4 ? 'video/mp4' : 'application/vnd.apple.mpegurl';
+                        
+                        videoPreview.innerHTML = `
+                            <video controls style="width: 100%; height: 100%; border-radius: 8px;">
+                                <source src="/api/download-file/${encodeURIComponent(fileToShow)}" type="${videoType}">
+                                Your browser does not support the video tag.
+                            </video>
+                        `;
+                        
+                        // Show download buttons for available files
+                        if (hasM3u8) {
+                            downloadM3u8Btn.innerHTML = `<i class="fas fa-download"></i> Download m3u8 (${this.formatFileSize(m3u8Data.size)})`;
+                            downloadM3u8Btn.style.display = 'inline-block';
+                            downloadM3u8Btn.onclick = () => this.downloadFile(m3u8Filename);
+                        }
+                        
+                        if (hasMp4) {
+                            downloadMp4Btn.innerHTML = `<i class="fas fa-download"></i> Download mp4 (${this.formatFileSize(mp4Data.size)})`;
+                            downloadMp4Btn.style.display = 'inline-block';
+                            downloadMp4Btn.onclick = () => this.downloadFile(mp4Filename);
+                        }
+                    } else {
+                        // File doesn't exist - show placeholder
+                        this.showPlaceholder();
+                    }
+                }).catch(() => {
+                    // Error - show placeholder
+                    this.showPlaceholder();
+                });
+            }
+            
+            setupVideoPreviewFromFilename(actualFilename) {
+                // This method handles the completed download case where we have the actual filename
+                const videoPreview = document.getElementById('videoPreview');
+                const downloadM3u8Btn = document.getElementById('downloadM3u8Btn');
+                const downloadMp4Btn = document.getElementById('downloadMp4Btn');
+                
+                // Hide both buttons initially
+                downloadM3u8Btn.style.display = 'none';
+                downloadMp4Btn.style.display = 'none';
+                
+                // Clean up existing HLS player
+                if (this.hls) {
+                    this.hls.destroy();
+                    this.hls = null;
+                }
+                
+                if (!actualFilename) {
+                    this.showPlaceholder();
+                    return;
+                }
+                
+                // Get the base name without extension
+                const baseName = actualFilename.replace(/\.(m3u8|mp4)$/, '');
+                const m3u8Filename = `${baseName}.m3u8`;
+                const mp4Filename = `${baseName}.mp4`;
+                
+                // Check both possible files
+                Promise.all([
+                    fetch(`/api/file-info/${encodeURIComponent(m3u8Filename)}`).then(r => r.json()),
+                    fetch(`/api/file-info/${encodeURIComponent(mp4Filename)}`).then(r => r.json())
+                ]).then(([m3u8Data, mp4Data]) => {
+                    const hasM3u8 = m3u8Data.exists;
+                    const hasMp4 = mp4Data.exists;
+                    
+                    if (hasM3u8 || hasMp4) {
+                        // Show video preview
+                        const preferredFile = hasMp4 ? mp4Filename : m3u8Filename;
+                        const isM3u8 = !hasMp4 && hasM3u8;
+                        
+                        // Create video element
+                        const videoId = 'previewVideo';
+                        videoPreview.innerHTML = `
+                            <video id="${videoId}" controls style="width: 100%; height: 100%; border-radius: 8px;" preload="metadata">
+                                ${!isM3u8 ? `<source src="/api/download-file/${encodeURIComponent(preferredFile)}" type="video/mp4">` : ''}
+                                Your browser does not support the video tag.
+                            </video>
+                        `;
+                        
+                        // Handle M3U8 with HLS.js
+                        if (isM3u8) {
+                            const video = document.getElementById(videoId);
+                            const m3u8Url = `/api/download-file/${encodeURIComponent(m3u8Filename)}`;
+                            
+                            if (Hls.isSupported()) {
+                                this.hls = new Hls();
+                                this.hls.loadSource(m3u8Url);
+                                this.hls.attachMedia(video);
+                                this.hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                                    console.log('M3U8 manifest parsed, ready to play');
+                                });
+                            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                                // Native HLS support (Safari)
+                                video.src = m3u8Url;
+                            } else {
+                                // Fallback message
+                                videoPreview.innerHTML = `
+                                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; background: #1a1a1a; color: #fff; border-radius: 8px;">
+                                        <i class="fas fa-exclamation-triangle" style="font-size: 2rem; margin-bottom: 1rem; color: #ffa500;"></i>
+                                        <p style="text-align: center; margin: 0;">M3U8 Preview Not Supported</p>
+                                        <p style="text-align: center; margin: 0.5rem 0 0 0; font-size: 0.9rem; opacity: 0.7;">
+                                            Download the file or convert to MP4 for preview
+                                        </p>
+                                    </div>
+                                `;
+                            }
+                        }
+                        
+                        // Show download buttons for available files
+                        if (hasM3u8) {
+                            downloadM3u8Btn.innerHTML = `<i class="fas fa-download"></i> Download M3U8 (${this.formatFileSize(m3u8Data.size)})`;
+                            downloadM3u8Btn.style.display = 'inline-block';
+                            downloadM3u8Btn.onclick = () => this.downloadFile(m3u8Filename);
+                        }
+                        
+                        if (hasMp4) {
+                            downloadMp4Btn.innerHTML = `<i class="fas fa-download"></i> Download MP4 (${this.formatFileSize(mp4Data.size)})`;
+                            downloadMp4Btn.style.display = 'inline-block';
+                            downloadMp4Btn.onclick = () => this.downloadFile(mp4Filename);
+                        }
+                    } else {
+                        this.showPlaceholder();
+                    }
+                }).catch(error => {
+                    console.error('Error checking file info:', error);
+                    this.showPlaceholder();
+                });
+            }
+            
+            showPlaceholder() {
+                const videoPreview = document.getElementById('videoPreview');
+                videoPreview.innerHTML = `
+                    <button class="play-button">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    <button class="fullscreen-btn">fullscreen</button>
+                    <div class="video-time">0:00</div>
+                    <div class="video-time-end">--:--</div>
+                `;
+            }
+            
+            downloadFile(filename) {
+                // Trigger browser download
+                const link = document.createElement('a');
+                link.href = `/api/download-file/${encodeURIComponent(filename)}?cleanup=true`;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // Show feedback
+                this.updateProgress(`📥 Downloading ${filename}...`, 'info');
+                
+                // Auto-close modal after short delay
+                setTimeout(() => {
+                    this.updateProgress('📥 Download started! Check your downloads folder.', 'success');
+                    
+                    // Close modal after another short delay
+                    setTimeout(() => {
+                        this.closeModal();
+                    }, 1500); // Close after 1.5 seconds
+                }, 500); // Show message for 0.5 seconds first
+                
+                // Update UI after download
+                setTimeout(() => {
+                    this.loadHistory();
+                }, 2000);
+            }
+            
+            closeModal() {
+                // Clean up HLS player when modal closes
+                if (this.hls) {
+                    this.hls.destroy();
+                    this.hls = null;
+                }
+                
+                this.modal.classList.remove('active');
+            }
+            
+            extractVideoTitle(url) {
+                const parts = url.split('/');
+                return parts[parts.length - 1] || 'Video';
+            }
+            
+            resetProgress() {
+                this.progressFill.style.width = '0%';
+                this.progressText.textContent = 'Starting download...';
+                this.progressTitle.textContent = 'Progress 0%';
+            }
+            
+            updateProgress(message, status) {
+                this.progressText.textContent = message;
+                
+                // Extract progress percentage - look for various patterns including parentheses
+                let progressMatch = message.match(/(\d+)%/);
+                let progress = null;
+                
+                if (progressMatch) {
+                    progress = parseInt(progressMatch[1]);
+                } else {
+                    // Assign progress based on message content
+                    if (message.includes('started')) progress = 10;
+                    else if (message.includes('Page loaded')) progress = 20;
+                    else if (message.includes('Waiting for JavaScript')) progress = 30;
+                    else if (message.includes('Extracting video URLs')) progress = 40;
+                    else if (message.includes('Found') && message.includes('URLs')) progress = 60;
+                    else if (message.includes('Downloading') && !message.includes('Converting')) progress = 80;
+                    else if (message.includes('Converting to MP4') && !progressMatch) progress = 75; // Default for conversion start
+                    else if (message.includes('completed successfully')) progress = 100;
+                }
+                
+                if (progress !== null) {
+                    this.progressFill.style.width = `${progress}%`;
+                    this.progressTitle.textContent = `Progress ${progress}%`;
+                }
+                
+                // Update progress bar color based on status
+                if (status === 'success') {
+                    this.progressFill.style.background = 'var(--success-color)';
+                } else if (status === 'error') {
+                    this.progressFill.style.background = 'var(--error-color)';
+                } else {
+                    this.progressFill.style.background = 'var(--primary-color)';
+                }
+            }
+            
+            updateDownloadButton() {
+                if (this.isDownloading) {
+                    this.downloadBtn.disabled = true;
+                    this.downloadBtn.innerHTML = '<div class="loading-spinner"></div> Downloading...';
+                } else {
+                    this.downloadBtn.disabled = false;
+                    this.downloadBtn.innerHTML = '<i class="fas fa-download"></i> Download';
+                }
+            }
+            
+            async loadHistory() {
+                try {
+                    const response = await fetch('/api/history');
+                    const data = await response.json();
+                    this.downloadHistory = data.history || [];
+                    this.displayHistory();
+                } catch (error) {
+                    console.error('Error loading history:', error);
+                }
+            }
+            
+            displayHistory() {
+                if (this.downloadHistory.length === 0) {
+                    this.historyList.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-history"></i>
+                            <p>No downloads yet</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                this.historyList.innerHTML = this.downloadHistory.map(item => `
+                    <div class="history-item">
+                        <div class="history-info">
+                            <div class="history-icon ${item.convert_to_mp4 ? 'mp4' : 'm3u8'}">
+                                <i class="fas fa-${item.convert_to_mp4 ? 'film' : 'list'}"></i>
+                            </div>
+                            <div class="history-details">
+                                <h4>${this.extractVideoTitle(item.url)}</h4>
+                                <div class="history-meta">
+                                    ${item.timestamp}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="history-actions">
+                            <button class="btn btn-secondary btn-small" onclick="app.redownloadVideo('${item.url}', false)">
+                                <i class="fas fa-download"></i> m3u8
+                            </button>
+                            <button class="btn btn-secondary btn-small" onclick="app.redownloadVideo('${item.url}', true)">
+                                <i class="fas fa-download"></i> mp4
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            
+            async redownloadVideo(url, convertToMp4) {
+                // Restart the download process with the original URL
+                this.urlInput.value = url;
+                this.convertCheckbox.checked = convertToMp4;
+                
+                // Trigger download
+                if (this.isDownloading) return;
+                
+                this.isDownloading = true;
+                this.updateDownloadButton();
+                this.showModal(url, '', convertToMp4);
+                
+                try {
+                    const response = await fetch('/api/download', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            url: url,
+                            filename: '',
+                            convert_to_mp4: convertToMp4,
+                            session_id: this.sessionId
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Download failed');
+                    }
+                    
+                    this.updateProgress('🚀 Download started...', 'info');
+                    
+                } catch (error) {
+                    this.isDownloading = false;
+                    this.updateDownloadButton();
+                    this.updateProgress(`❌ Error: ${error.message}`, 'error');
+                }
+            }
+            
+            formatFileSize(bytes) {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+        }
+        
+        // Global app instance
+        const app = new KukajDownloader();
+        
+        // Global function for HTML onclick handlers
+        function closeModal() {
+            app.closeModal();
+        }
+    </script>
+</body>
+</html> 

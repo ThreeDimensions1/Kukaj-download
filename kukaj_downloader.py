@@ -88,60 +88,148 @@ class KukajDownloader:
         
         # Install and setup Chrome driver with better error handling
         try:
-            # Get the chromedriver path
-            driver_path = ChromeDriverManager().install()
-            
-            # Handle the case where webdriver-manager returns wrong path
-            if not driver_path.endswith('chromedriver'):
+            # Try system chromedriver first (more reliable)
+            try:
+                self.driver = webdriver.Chrome(options=chrome_options)
+                print("✅ Using system ChromeDriver")
+            except Exception:
+                # Fallback to webdriver-manager
+                print("🔄 System ChromeDriver not found, downloading...")
+                
+                # Try to clear cache and reinstall if we've had issues before
+                try:
+                    driver_path = ChromeDriverManager().install()
+                except Exception as e:
+                    print(f"⚠️ ChromeDriver installation failed: {e}")
+                    print("🔄 Clearing WebDriver cache and retrying...")
+                    
+                    # Clear the webdriver cache
+                    import shutil
+                    cache_dir = os.path.expanduser("~/.wdm")
+                    if os.path.exists(cache_dir):
+                        try:
+                            shutil.rmtree(cache_dir)
+                            print("✅ WebDriver cache cleared")
+                        except:
+                            print("⚠️ Could not clear cache")
+                    
+                    # Retry installation
+                    driver_path = ChromeDriverManager().install()
+                
+                # Handle the case where webdriver-manager returns wrong path
                 import os
                 import glob
-                # Look for the actual chromedriver executable
-                base_dir = os.path.dirname(driver_path)
-                driver_candidates = glob.glob(os.path.join(base_dir, "**/chromedriver*"), recursive=True)
+                import stat
                 
-                # Find the actual executable
-                for candidate in driver_candidates:
-                    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                        if not candidate.endswith('.txt') and not candidate.endswith('.md'):
-                            driver_path = candidate
-                            break
+                # Always validate the path returned by webdriver-manager
+                if not os.path.isfile(driver_path) or not os.access(driver_path, os.X_OK):
+                    print(f"⚠️ Invalid driver path: {driver_path}")
+                    # Look for the actual chromedriver executable
+                    base_dir = os.path.dirname(driver_path)
+                    
+                    # Search more thoroughly for chromedriver
+                    driver_candidates = []
+                    
+                    # Look in the same directory and subdirectories
+                    for root, dirs, files in os.walk(base_dir):
+                        for file in files:
+                            if file == 'chromedriver' or (file.startswith('chromedriver') and not file.endswith('.txt') and not file.endswith('.md')):
+                                full_path = os.path.join(root, file)
+                                driver_candidates.append(full_path)
+                    
+                    # Find the actual executable
+                    driver_path = None
+                    for candidate in driver_candidates:
+                        if os.path.isfile(candidate):
+                            # Check if it's actually executable
+                            file_stat = os.stat(candidate)
+                            if file_stat.st_mode & stat.S_IXUSR:  # Check if user has execute permission
+                                # Additional check: make sure it's not a text file
+                                try:
+                                    with open(candidate, 'rb') as f:
+                                        header = f.read(4)
+                                        # Check if it's a binary file (not text)
+                                        if header and not header.startswith(b'#') and not header.startswith(b'<'):
+                                            driver_path = candidate
+                                            print(f"✅ Found valid ChromeDriver at: {candidate}")
+                                            break
+                                except:
+                                    continue
+                    
+                    if not driver_path:
+                        raise Exception("Could not find valid ChromeDriver executable")
+                
+                print(f"🔧 Using ChromeDriver at: {driver_path}")
+                
+                service = Service(driver_path)
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                print("✅ Using downloaded ChromeDriver")
             
-            service = Service(driver_path)
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            # Set a reasonable timeout
+            # Set timeouts to prevent hanging
+            self.driver.set_page_load_timeout(30)  # 30 second page load timeout
             self.driver.implicitly_wait(10)
             
             # Execute script to avoid detection
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
         except Exception as e:
-            print(f"Error setting up Chrome driver: {e}")
-            print("Trying to use system Chrome driver...")
-            try:
-                # Try to use system chromedriver
-                self.driver = webdriver.Chrome(options=chrome_options)
-                self.driver.implicitly_wait(10)
-                self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            except Exception as e2:
-                print(f"Failed to initialize Chrome driver: {e2}")
-                print("Please ensure Chrome browser and chromedriver are installed")
-                raise
+            print(f"❌ Failed to initialize Chrome driver: {e}")
+            print("💡 Try installing ChromeDriver manually or check if Chrome is installed")
+            raise
     
     def extract_m3u8_url(self, url):
         """Extract .m3u8 URL from the webpage"""
         print(f"Loading page: {url}")
-        self.driver.get(url)
+        
+        try:
+            # Load page with timeout handling
+            self.driver.get(url)
+            print("✅ Page loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Page load issue: {e}")
+            print("🔄 Attempting to continue anyway...")
         
         # Wait for the page to load and JavaScript to execute
-        time.sleep(5)  # Wait for JavaScript to load the video
+        print("🔄 Waiting for JavaScript to load video...")
         
-        # Look for .m3u8 URLs in various places
+        # Progressive wait with status updates
+        for i in range(5):
+            time.sleep(1)
+            print(f"⏳ Waiting... ({i+1}/5 seconds)")
+        
+        # Try to trigger video loading by scrolling and looking for play buttons
+        print("🎬 Attempting to trigger video loading...")
+        try:
+            # Scroll down to ensure video is in viewport
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
+            time.sleep(1)
+            
+            # Look for and click play buttons
+            play_buttons = self.driver.find_elements(By.CSS_SELECTOR, 
+                "button[aria-label*='play'], button[title*='play'], .play-button, .vjs-big-play-button, [class*='play']")
+            
+            if play_buttons:
+                print(f"   Found {len(play_buttons)} potential play buttons, clicking the first one...")
+                try:
+                    play_buttons[0].click()
+                    time.sleep(2)
+                except:
+                    print("   ⚠️ Could not click play button")
+            else:
+                print("   No play buttons found")
+                
+        except Exception as e:
+            print(f"   ⚠️ Error during page interaction: {e}")
+        
+        print("🔍 Extracting video URLs from network logs...")
+        
+        # Only use Method 1 (Network logs) - it's the only one that works
         m3u8_urls = []
         
-        # Method 1: Check network requests (if available)
         try:
             logs = self.driver.get_log('performance')
+            print(f"📊 Analyzing {len(logs)} network requests...")
+            
             for log in logs:
                 message = log['message']
                 if '.m3u8' in message:
@@ -149,97 +237,108 @@ class KukajDownloader:
                     url_match = re.search(r'https?://[^\s"\']+\.m3u8[^\s"\']*', message)
                     if url_match:
                         m3u8_urls.append(url_match.group(0))
-        except Exception as e:
-            print(f"Performance logs not available: {e}")
-            # Continue with other methods
-        
-        # Method 2: Check page source for .m3u8 URLs
-        page_source = self.driver.page_source
-        m3u8_pattern = r'https?://[^\s"\']+\.m3u8[^\s"\']*'
-        found_urls = re.findall(m3u8_pattern, page_source)
-        m3u8_urls.extend(found_urls)
-        
-        # Method 3: Execute JavaScript to find video elements
-        try:
-            video_elements = self.driver.find_elements(By.TAG_NAME, "video")
-            for video in video_elements:
-                src = video.get_attribute("src")
-                if src and '.m3u8' in src:
-                    m3u8_urls.append(src)
-        except Exception as e:
-            print(f"Error finding video elements: {e}")
-        
-        # Method 4: Check for source elements
-        try:
-            source_elements = self.driver.find_elements(By.TAG_NAME, "source")
-            for source in source_elements:
-                src = source.get_attribute("src")
-                if src and '.m3u8' in src:
-                    m3u8_urls.append(src)
-        except Exception as e:
-            print(f"Error finding source elements: {e}")
-        
-        # Method 5: Execute JavaScript to find video sources
-        try:
-            js_sources = self.driver.execute_script("""
-                var sources = [];
-                // Check all video elements
-                var videos = document.querySelectorAll('video');
-                for (var i = 0; i < videos.length; i++) {
-                    if (videos[i].src && videos[i].src.includes('.m3u8')) {
-                        sources.push(videos[i].src);
-                    }
-                    if (videos[i].currentSrc && videos[i].currentSrc.includes('.m3u8')) {
-                        sources.push(videos[i].currentSrc);
-                    }
-                }
-                
-                // Check all source elements
-                var sourceTags = document.querySelectorAll('source');
-                for (var i = 0; i < sourceTags.length; i++) {
-                    if (sourceTags[i].src && sourceTags[i].src.includes('.m3u8')) {
-                        sources.push(sourceTags[i].src);
-                    }
-                }
-                
-                // Check for HLS.js or other video libraries
-                if (window.Hls && window.Hls.url) {
-                    sources.push(window.Hls.url);
-                }
-                
-                // Look for any variables containing .m3u8
-                var scripts = document.querySelectorAll('script');
-                for (var i = 0; i < scripts.length; i++) {
-                    var content = scripts[i].innerHTML;
-                    var m3u8Matches = content.match(/https?:\\/\\/[^\\s"']+\\.m3u8[^\\s"']*/g);
-                    if (m3u8Matches) {
-                        sources = sources.concat(m3u8Matches);
-                    }
-                }
-                
-                return sources;
-            """)
             
-            if js_sources:
-                m3u8_urls.extend(js_sources)
-                print(f"Found {len(js_sources)} URLs via JavaScript")
-        except Exception as e:
-            print(f"Error executing JavaScript: {e}")
-        
-        # Remove duplicates and return
-        m3u8_urls = list(set(m3u8_urls))
-        
-        if not m3u8_urls:
-            print("No .m3u8 URLs found. Let me try waiting longer...")
-            time.sleep(3)  # Additional wait
-            
-            # Try again with page source
-            page_source = self.driver.page_source
-            found_urls = re.findall(m3u8_pattern, page_source)
-            m3u8_urls.extend(found_urls)
+            # Remove duplicates
             m3u8_urls = list(set(m3u8_urls))
-        
-        return m3u8_urls
+            
+            if m3u8_urls:
+                print(f"✅ Found {len(m3u8_urls)} unique .m3u8 URLs")
+                for i, url in enumerate(m3u8_urls, 1):
+                    print(f"   {i}. {url[:80]}..." if len(url) > 80 else f"   {i}. {url}")
+                return m3u8_urls
+            else:
+                print("❌ No .m3u8 URLs found in network logs")
+                
+                # Enhanced fallback strategy
+                print("🔄 Trying enhanced fallback strategy...")
+                
+                # Try more aggressive interactions
+                try:
+                    # Look for video elements and try to play them
+                    video_elements = self.driver.find_elements(By.TAG_NAME, 'video')
+                    if video_elements:
+                        print(f"   Found {len(video_elements)} video elements, trying to play...")
+                        for video in video_elements:
+                            try:
+                                self.driver.execute_script("arguments[0].play();", video)
+                                time.sleep(1)
+                                print("   ✅ Triggered video play")
+                            except:
+                                pass
+                    
+                    # Try clicking more button types
+                    more_buttons = self.driver.find_elements(By.CSS_SELECTOR, 
+                        "[onclick*='play'], [class*='player'], .video-player, .player-button, .start-button")
+                    
+                    if more_buttons:
+                        print(f"   Found {len(more_buttons)} additional buttons, trying to click...")
+                        for button in more_buttons[:3]:  # Try first 3
+                            try:
+                                self.driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                                time.sleep(0.5)
+                                self.driver.execute_script("arguments[0].click();", button)
+                                time.sleep(1)
+                                print("   ✅ Clicked additional button")
+                            except:
+                                pass
+                    
+                    # Wait for potential async video loading
+                    print("⏳ Waiting additional 8 seconds for video to load...")
+                    time.sleep(8)
+                    
+                    # Get any new network logs generated after interactions
+                    new_logs = self.driver.get_log('performance')
+                    if new_logs:
+                        print(f"📊 Analyzing {len(new_logs)} new network requests...")
+                        for log in new_logs:
+                            message = log['message']
+                            if '.m3u8' in message:
+                                url_match = re.search(r'https?://[^\s"\']+\.m3u8[^\s"\']*', message)
+                                if url_match:
+                                    m3u8_urls.append(url_match.group(0))
+                        
+                        m3u8_urls = list(set(m3u8_urls))
+                        
+                        if m3u8_urls:
+                            print(f"✅ Enhanced fallback successful! Found {len(m3u8_urls)} .m3u8 URLs")
+                            for i, url in enumerate(m3u8_urls, 1):
+                                print(f"   {i}. {url[:80]}..." if len(url) > 80 else f"   {i}. {url}")
+                            return m3u8_urls
+                    else:
+                        print("   No new network requests captured")
+                    
+                except Exception as e:
+                    print(f"   ⚠️ Error during enhanced fallback: {e}")
+                
+                print("❌ Still no .m3u8 URLs found after enhanced fallback")
+                
+                # Final debug info
+                page_title = self.driver.title
+                current_url = self.driver.current_url
+                print(f"🔍 Debug info:")
+                print(f"   Page title: {page_title}")
+                print(f"   Current URL: {current_url}")
+                
+                if "kukaj" not in current_url.lower():
+                    print("⚠️ Page may have redirected - URL doesn't contain 'kukaj'")
+                
+                # Last resort: Check page source for any clues
+                try:
+                    page_source = self.driver.page_source
+                    if "This video is not available" in page_source or "Video not found" in page_source:
+                        print("⚠️ Video may not be available on this page")
+                    elif "loading" in page_source.lower() or "spinner" in page_source.lower():
+                        print("⚠️ Page may still be loading content")
+                    else:
+                        print("⚠️ Page content appears normal - video sources may be heavily obfuscated")
+                except:
+                    pass
+                
+                return []
+                
+        except Exception as e:
+            print(f"⚠️ Error accessing network logs: {e}")
+            return []
     
     def download_with_ffmpeg(self, m3u8_url, output_filename):
         """Download video using ffmpeg"""
