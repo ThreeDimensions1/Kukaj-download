@@ -1,0 +1,35 @@
+name: "Kukaj Video Downloader"
+description: "Download videos from kukaj.fi with M3U8 and MP4 support"
+version: "1.0.0"
+slug: "kukaj_downloader"
+init: false
+arch:
+  - armhf
+  - armv7
+  - aarch64
+  - amd64
+  - i386
+startup: services
+boot: auto
+ports:
+  8080/tcp: 8080
+ports_description:
+  8080/tcp: "Web interface port"
+options:
+  port: 8080
+  headless: true
+schema:
+  port: int(1024,65535)
+  headless: bool
+image: "ghcr.io/yourusername/kukaj-downloader-addon"
+webui: "http://[HOST]:[PORT:8080]"
+panel_icon: mdi:download
+panel_title: "Kukaj Downloader"
+map:
+  - "share:rw"
+  - "media:rw"
+environment:
+  - "DISPLAY"
+devices:
+  - "/dev/dri"
+tmpfs: true 

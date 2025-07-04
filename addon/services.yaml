@@ -1,0 +1,41 @@
+download_video:
+  name: "Download Video"
+  description: "Download a video from kukaj.fi"
+  fields:
+    url:
+      name: "Video URL"
+      description: "The kukaj.fi video URL to download"
+      required: true
+      selector:
+        text:
+          type: url
+    format:
+      name: "Format"
+      description: "Video format to download"
+      default: "m3u8"
+      selector:
+        select:
+          options:
+            - "m3u8"
+            - "mp4"
+    filename:
+      name: "Filename"
+      description: "Custom filename (optional)"
+      required: false
+      selector:
+        text:
+
+get_downloads:
+  name: "Get Downloads"
+  description: "Get list of downloaded files"
+
+delete_download:
+  name: "Delete Download"
+  description: "Delete a downloaded file"
+  fields:
+    filename:
+      name: "Filename"
+      description: "The filename to delete"
+      required: true
+      selector:
+        text: 

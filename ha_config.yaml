@@ -1,0 +1,70 @@
+rest_command:
+  download_kukaj_video:
+    url: http://localhost:8080/api/download
+    method: POST
+    headers:
+      Content-Type: application/json
+    payload: "{\n  \"url\": \"{{ url }}\",\n  \"format\": \"{{ format | default('m3u8')\
+      \ }}\",\n  \"filename\": \"{{ filename | default('') }}\"\n}"
+sensor:
+- platform: rest
+  name: Kukaj Downloads
+  resource: http://localhost:8080/api/downloads
+  scan_interval: 30
+  value_template: '{{ value_json | length }}'
+  json_attributes:
+  - downloads
+shell_command:
+  download_kukaj_m3u8: cd '/Users/petersmorada/Documents/development/Kukaj download'
+    && python3 kukaj_downloader.py '{{ url }}' -o '{{ filename }}'
+  download_kukaj_mp4: cd '/Users/petersmorada/Documents/development/Kukaj download'
+    && python3 kukaj_downloader.py '{{ url }}' --mp4 -o '{{ filename }}'
+  cleanup_downloads: find '/Users/petersmorada/Documents/development/Kukaj download/downloads'
+    -type f -mtime +7 -delete
+script:
+  download_video:
+    alias: Download Kukaj Video
+    fields:
+      url:
+        description: Video URL
+        example: https://serial.kukaj.fi/hra-na-olihen/S03E04
+      format:
+        description: Format (m3u8 or mp4)
+        example: mp4
+      filename:
+        description: Custom filename
+        example: my-video
+    sequence:
+    - choose:
+      - conditions:
+        - condition: template
+          value_template: '{{ format == ''mp4'' }}'
+        sequence:
+        - service: shell_command.download_kukaj_mp4
+          data:
+            url: '{{ url }}'
+            filename: '{{ filename }}'
+      default:
+      - service: shell_command.download_kukaj_m3u8
+        data:
+          url: '{{ url }}'
+          filename: '{{ filename }}'
+automation:
+- alias: Download Video from Webhook
+  trigger:
+    platform: webhook
+    webhook_id: kukaj_download
+  action:
+    service: rest_command.download_kukaj_video
+    data:
+      url: '{{ trigger.data.url }}'
+      format: '{{ trigger.data.format | default("m3u8") }}'
+- alias: Download Complete Notification
+  trigger:
+    platform: state
+    entity_id: sensor.kukaj_downloads
+  action:
+    service: notify.persistent_notification
+    data:
+      message: Video download completed! {{ states("sensor.kukaj_downloads") }} files
+        ready.
