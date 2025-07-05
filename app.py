@@ -7,6 +7,8 @@ Beautiful web UI for downloading videos from kukaj domains
 import os
 import threading
 import time
+import atexit
+import shutil
 from flask import Flask, render_template, request, jsonify, send_file, after_this_request
 from flask_socketio import SocketIO, emit, join_room
 from kukaj_downloader import KukajDownloader, normalize_kukaj_url
@@ -18,9 +20,97 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kukaj_downloader_secret_key'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# Download directory
+DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'downloads')
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'download_history.json')
+
 # Store active downloads
 active_downloads = {}
 download_history = []
+
+def setup_downloads_directory():
+    """Create and clean the downloads directory"""
+    if os.path.exists(DOWNLOADS_DIR):
+        # Clean the directory
+        shutil.rmtree(DOWNLOADS_DIR)
+    os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+    print(f"📁 Downloads directory ready: {DOWNLOADS_DIR}")
+
+def cleanup_downloads_directory():
+    """Clean up downloads directory on exit"""
+    if os.path.exists(DOWNLOADS_DIR):
+        try:
+            shutil.rmtree(DOWNLOADS_DIR)
+            print("🧹 Downloads directory cleaned")
+        except Exception as e:
+            print(f"⚠️ Error cleaning downloads directory: {e}")
+
+def load_history():
+    """Load download history from JSON file"""
+    global download_history
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                download_history = json.load(f)
+        else:
+            download_history = []
+    except Exception as e:
+        print(f"⚠️ Error loading history: {e}")
+        download_history = []
+
+def save_history():
+    """Save download history to JSON file"""
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(download_history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Error saving history: {e}")
+
+def add_to_history(url, filename, success=True):
+    """Add download to history"""
+    global download_history
+    # Extract movie/series name from URL
+    from urllib.parse import urlparse
+    parsed_url = urlparse(url)
+    path_parts = parsed_url.path.strip('/').split('/')
+    
+    # Generate display name
+    if len(path_parts) >= 1 and path_parts[-1]:
+        if len(path_parts) >= 2 and path_parts[-2] not in ['film', 'serial']:
+            # For series URLs like /series-name/S01E01
+            display_name = f"{path_parts[-2]} - {path_parts[-1]}"
+        else:
+            # For film URLs like /matrix
+            display_name = path_parts[-1]
+    else:
+        display_name = "Unknown"
+    
+    # Clean display name
+    display_name = re.sub(r'[_-]', ' ', display_name).title()
+    
+    history_entry = {
+        'url': url,
+        'filename': filename,
+        'display_name': display_name,
+        'date': datetime.now().isoformat(),
+        'success': success,
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    download_history.insert(0, history_entry)  # Add to beginning
+    
+    # Keep only last 50 entries
+    if len(download_history) > 50:
+        download_history = download_history[:50]
+    
+    save_history()
+
+# Initialize on startup
+setup_downloads_directory()
+load_history()
+
+# Register cleanup function
+atexit.register(cleanup_downloads_directory)
 
 class WebDownloader(KukajDownloader):
     """Extended downloader with web interface integration"""
@@ -85,9 +175,9 @@ class WebDownloader(KukajDownloader):
                 base_name = re.sub(r'[^\w\-_.]', '_', base_name)
                 
                 if convert_to_mp4:
-                    output_filename = f"{base_name}.mp4"
+                    output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}.mp4")
                 else:
-                    output_filename = f"{base_name}.m3u8"
+                    output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}.m3u8")
             
             # Download based on the requested format
             if convert_to_mp4:
@@ -393,22 +483,18 @@ def start_download():
                     
                     actual_filename = f"{base_name}.{'mp4' if convert_to_mp4 else 'm3u8'}"
                 
-                download_history.append({
-                    'url': url,
-                    'filename': actual_filename,
-                    'convert_to_mp4': convert_to_mp4,
-                    'success': success,
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
+                add_to_history(url, os.path.basename(actual_filename) if actual_filename else None, success)
                 
                 # Clean up
                 if session_id in active_downloads:
                     del active_downloads[session_id]
                 
                 # Emit to specific session and also broadcast to all clients
+                # Send just the filename, not the full path
+                filename_only = os.path.basename(actual_filename) if actual_filename else None
                 socketio.emit('download_complete', {
                     'success': success,
-                    'filename': actual_filename,
+                    'filename': filename_only,
                     'original_filename': output_filename
                 }, room=session_id)
                 
@@ -433,14 +519,16 @@ def start_download():
 def list_files():
     """List downloaded files"""
     files = []
-    for filename in os.listdir('.'):
-        if filename.endswith(('.m3u8', '.mp4')) and not filename.startswith('.'):
-            stat = os.stat(filename)
-            files.append({
-                'name': filename,
-                'size': stat.st_size,
-                'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-            })
+    if os.path.exists(DOWNLOADS_DIR):
+        for filename in os.listdir(DOWNLOADS_DIR):
+            if filename.endswith(('.m3u8', '.mp4')) and not filename.startswith('.'):
+                filepath = os.path.join(DOWNLOADS_DIR, filename)
+                stat = os.stat(filepath)
+                files.append({
+                    'name': filename,
+                    'size': stat.st_size,
+                    'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                })
     
     return jsonify({'files': sorted(files, key=lambda x: x['modified'], reverse=True)})
 
@@ -448,8 +536,9 @@ def list_files():
 def get_file_info(filename):
     """Get file information (existence, size, etc.)"""
     try:
-        if os.path.exists(filename) and filename.endswith(('.m3u8', '.mp4')):
-            stat = os.stat(filename)
+        filepath = os.path.join(DOWNLOADS_DIR, filename)
+        if os.path.exists(filepath) and filename.endswith(('.m3u8', '.mp4')):
+            stat = os.stat(filepath)
             return jsonify({
                 'exists': True,
                 'filename': filename,
@@ -463,27 +552,11 @@ def get_file_info(filename):
 
 @app.route('/api/download-file/<filename>')
 def download_file(filename):
-    """Download a file and optionally clean it up"""
+    """Download a file"""
     try:
-        if os.path.exists(filename) and filename.endswith(('.m3u8', '.mp4')):
-            cleanup = request.args.get('cleanup', 'false').lower() == 'true'
-            
-            @after_this_request
-            def cleanup_file(response):
-                if cleanup:
-                    try:
-                        os.remove(filename)
-                        print(f"🗑️ Cleaned up local file: {filename}")
-                        
-                        # Emit files updated event to refresh UI
-                        socketio.emit('files_updated', {
-                            'message': 'File list updated after cleanup'
-                        })
-                    except Exception as e:
-                        print(f"⚠️ Could not clean up file {filename}: {e}")
-                return response
-            
-            return send_file(filename, as_attachment=True)
+        filepath = os.path.join(DOWNLOADS_DIR, filename)
+        if os.path.exists(filepath) and filename.endswith(('.m3u8', '.mp4')):
+            return send_file(filepath, as_attachment=True)
         else:
             return jsonify({'error': 'File not found'}), 404
     except Exception as e:
@@ -492,26 +565,7 @@ def download_file(filename):
 @app.route('/api/history')
 def get_history():
     """Get download history"""
-    # Include actual history and existing files for better UX
-    history = download_history[-10:].copy()
-    
-    # If no history but files exist, create history entries from existing files
-    if not history:
-        try:
-            for filename in os.listdir('.'):
-                if filename.endswith(('.m3u8', '.mp4')) and not filename.startswith('.'):
-                    stat = os.stat(filename)
-                    history.append({
-                        'url': f'https://kukaj.fi/unknown',  # Placeholder URL
-                        'filename': filename,
-                        'convert_to_mp4': filename.endswith('.mp4'),
-                        'success': True,
-                        'timestamp': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-                    })
-        except Exception as e:
-            print(f"Error reading files for history: {e}")
-    
-    return jsonify({'history': sorted(history, key=lambda x: x['timestamp'], reverse=True)})  # Last 10 downloads
+    return jsonify({'history': download_history})
 
 @socketio.on('connect')
 def handle_connect():
@@ -537,10 +591,7 @@ def handle_join_session(data):
 
 if __name__ == '__main__':
     print("🚀 Starting Kukaj Video Downloader Web Interface")
-    print("📍 Open your browser to: http://localhost:5000")
+    print("📍 Open your browser to: http://localhost:8080")
     print("🎬 Ready to download videos!")
-    
-    # Create downloads directory if it doesn't exist
-    os.makedirs('downloads', exist_ok=True)
     
     socketio.run(app, debug=True, host='0.0.0.0', port=8080) 

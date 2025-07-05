@@ -5,6 +5,14 @@ Simple startup script for Kukaj Video Downloader Web Interface
 
 import os
 import sys
+import webbrowser
+import threading
+import time
+
+def open_browser():
+    """Open browser after a short delay"""
+    time.sleep(1.5)  # Wait for server to start
+    webbrowser.open('http://localhost:8080')
 
 def main():
     print("🚀 Starting Kukaj Video Downloader Web Interface")
@@ -31,7 +39,12 @@ def main():
         from app import app, socketio
         print("📍 Web interface will be available at: http://localhost:8080")
         print("🎬 Ready to download videos!")
+        print("🌐 Opening browser...")
         print("=" * 50)
+        
+        # Open browser in a separate thread
+        browser_thread = threading.Thread(target=open_browser, daemon=True)
+        browser_thread.start()
         
         # Run the app
         socketio.run(app, debug=False, host='0.0.0.0', port=8080)

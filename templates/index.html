@@ -45,6 +45,7 @@
             text-align: center;
             margin-bottom: 3rem;
             color: white;
+            position: relative;
         }
 
         .header h1 {
@@ -60,6 +61,30 @@
         .header p {
             font-size: 1.1rem;
             opacity: 0.9;
+        }
+
+        .info-button {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .info-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: scale(1.05);
         }
 
         .main-content {
@@ -320,7 +345,7 @@
 
         .video-preview {
             width: 100%;
-            height: 200px;
+            aspect-ratio: 16/9;
             background: #000;
             border-radius: 8px;
             margin-bottom: 1rem;
@@ -329,6 +354,7 @@
             justify-content: center;
             position: relative;
             color: white;
+            object-fit: contain;
         }
 
         .video-preview .play-button {
@@ -432,32 +458,92 @@
             100% { transform: rotate(360deg); }
         }
 
-        @media (max-width: 768px) {
-            .main-content {
-                grid-template-columns: 1fr;
+                    /* Info Modal */
+            .info-modal {
+                display: none;
+                position: fixed;
+                z-index: 1000;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.8);
+                backdrop-filter: blur(5px);
             }
-            
-            .container {
-                padding: 1rem;
+
+            .info-modal-content {
+                background: var(--bg-primary);
+                margin: 5% auto;
+                padding: 2rem;
+                border-radius: 16px;
+                width: 90%;
+                max-width: 600px;
+                max-height: 80vh;
+                overflow-y: auto;
             }
-            
-            .header h1 {
-                font-size: 2rem;
+
+            .info-modal h3 {
+                color: var(--primary-color);
+                margin-bottom: 1rem;
+                font-size: 1.3rem;
             }
-            
-            .card {
-                padding: 1.5rem;
+
+            .info-modal p, .info-modal ul {
+                color: var(--text-primary);
+                margin-bottom: 1rem;
+                line-height: 1.6;
             }
-            
-            .modal {
-                width: 95%;
+
+            .info-modal ul {
+                padding-left: 1.5rem;
             }
-        }
+
+            .info-modal li {
+                margin-bottom: 0.5rem;
+            }
+
+            .info-modal code {
+                background: var(--bg-secondary);
+                padding: 0.2rem 0.4rem;
+                border-radius: 4px;
+                font-family: 'Courier New', monospace;
+            }
+
+            @media (max-width: 768px) {
+                .main-content {
+                    grid-template-columns: 1fr;
+                }
+                
+                .container {
+                    padding: 1rem;
+                }
+                
+                .header h1 {
+                    font-size: 2rem;
+                }
+                
+                .card {
+                    padding: 1.5rem;
+                }
+                
+                .modal {
+                    width: 95%;
+                }
+
+                .info-button {
+                    width: 40px;
+                    height: 40px;
+                    font-size: 1rem;
+                }
+            }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
+            <button class="info-button" onclick="showInfoModal()">
+                <i class="fas fa-info"></i>
+            </button>
             <h1><i class="fas fa-download"></i> Kukaj Video Downloader</h1>
             <p>Download videos from kukaj.fi, kukaj.io, kukaj.in and other kukaj domains</p>
         </div>
@@ -545,6 +631,40 @@
                     </div>
                     <div class="progress-text" id="progressText">Converting to mp4... 66%</div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info Modal -->
+    <div id="infoModal" class="info-modal">
+        <div class="info-modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">About Kukaj Video Downloader</h3>
+                <button class="modal-close" onclick="closeInfoModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3>🎬 Features</h3>
+                <ul>
+                    <li>Download videos from kukaj.fi domains</li>
+                    <li>Support for both M3U8 and MP4 formats</li>
+                    <li>Real-time download progress tracking</li>
+                    <li>Video preview with 16:9 aspect ratio</li>
+                    <li>Download history with JSON storage</li>
+                    <li>Automatic downloads folder management</li>
+                </ul>
+                
+                <h3>🔧 Usage</h3>
+                <p>1. Enter a kukaj.fi video URL</p>
+                <p>2. Choose M3U8 or MP4 format</p>
+                <p>3. Click download and wait for completion</p>
+                <p>4. Preview and download your video</p>
+                
+                <h3>📁 Storage</h3>
+                <p>Videos are temporarily stored in the <code>/downloads</code> folder and automatically cleaned up on startup and shutdown.</p>
+                
+                <h3>📝 Version</h3>
+                <p>Kukaj Video Downloader v2.0</p>
+                <p>Built with Flask, SocketIO, and modern web technologies</p>
             </div>
         </div>
     </div>
@@ -1040,6 +1160,27 @@
         // Global function for HTML onclick handlers
         function closeModal() {
             app.closeModal();
+        }
+        
+        // Global functions for info modal
+        function showInfoModal() {
+            document.getElementById('infoModal').style.display = 'block';
+        }
+        
+        function closeInfoModal() {
+            document.getElementById('infoModal').style.display = 'none';
+        }
+        
+        // Close modals when clicking outside
+        window.onclick = function(event) {
+            const videoModal = document.getElementById('videoModal');
+            const infoModal = document.getElementById('infoModal');
+            
+            if (event.target === videoModal) {
+                app.closeModal();
+            } else if (event.target === infoModal) {
+                closeInfoModal();
+            }
         }
     </script>
 </body>
