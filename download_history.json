@@ -3,6 +3,22 @@
     "url": "https://film.kukaj.fi/big-buck-bunny",
     "filename": "big-buck-bunny.m3u8",
     "display_name": "Big Buck Bunny",
+    "date": "2025-07-06T10:46:42.651507",
+    "success": true,
+    "timestamp": "2025-07-06 10:46:42"
+  },
+  {
+    "url": "https://film.kukaj.fi/big-buck-bunny",
+    "filename": "big-buck-bunny.m3u8",
+    "display_name": "Big Buck Bunny",
+    "date": "2025-07-05T18:48:46.244693",
+    "success": false,
+    "timestamp": "2025-07-05 18:48:46"
+  },
+  {
+    "url": "https://film.kukaj.fi/big-buck-bunny",
+    "filename": "big-buck-bunny.m3u8",
+    "display_name": "Big Buck Bunny",
     "date": "2025-07-04T19:44:22.108941",
     "success": true,
     "timestamp": "2025-07-04 19:44:22"

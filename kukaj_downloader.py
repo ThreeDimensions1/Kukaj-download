@@ -10,14 +10,11 @@ import time
 import requests
 import subprocess
 from urllib.parse import urljoin, urlparse
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+from playwright.sync_api import sync_playwright
 import m3u8
+import asyncio
+from pathlib import Path
+from playwright.async_api import async_playwright
 
 
 def normalize_kukaj_url(url):
@@ -65,426 +62,432 @@ def normalize_kukaj_url(url):
 class KukajDownloader:
     def __init__(self, headless=True):
         self.headless = headless
-        self.driver = None
-        self.setup_driver()
+        self.playwright = None
+        self.browser = None
+        self.page = None
+        self.context = None
+        self.setup_playwright()
     
-    def setup_driver(self):
-        """Set up Chrome WebDriver with appropriate options"""
-        chrome_options = Options()
-        if self.headless:
-            chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
-        # Enable logging for network requests
-        chrome_options.add_argument("--enable-logging")
-        chrome_options.add_argument("--log-level=0")
-        chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL', 'browser': 'ALL'})
-        
-        # Install and setup Chrome driver with better error handling
+    def setup_playwright(self):
+        """Set up Playwright with Chromium"""
         try:
-            # Try system chromedriver first (more reliable)
-            try:
-                self.driver = webdriver.Chrome(options=chrome_options)
-                print("✅ Using system ChromeDriver")
-            except Exception:
-                # Fallback to webdriver-manager
-                print("🔄 System ChromeDriver not found, downloading...")
-                
-                # Try to clear cache and reinstall if we've had issues before
-                try:
-                    driver_path = ChromeDriverManager().install()
-                except Exception as e:
-                    print(f"⚠️ ChromeDriver installation failed: {e}")
-                    print("🔄 Clearing WebDriver cache and retrying...")
-                    
-                    # Clear the webdriver cache
-                    import shutil
-                    cache_dir = os.path.expanduser("~/.wdm")
-                    if os.path.exists(cache_dir):
-                        try:
-                            shutil.rmtree(cache_dir)
-                            print("✅ WebDriver cache cleared")
-                        except:
-                            print("⚠️ Could not clear cache")
-                    
-                    # Retry installation
-                    driver_path = ChromeDriverManager().install()
-                
-                # Handle the case where webdriver-manager returns wrong path
-                import os
-                import glob
-                import stat
-                
-                # Always validate the path returned by webdriver-manager
-                if not os.path.isfile(driver_path) or not os.access(driver_path, os.X_OK):
-                    print(f"⚠️ Invalid driver path: {driver_path}")
-                    # Look for the actual chromedriver executable
-                    base_dir = os.path.dirname(driver_path)
-                    
-                    # Search more thoroughly for chromedriver
-                    driver_candidates = []
-                    
-                    # Look in the same directory and subdirectories
-                    for root, dirs, files in os.walk(base_dir):
-                        for file in files:
-                            if file == 'chromedriver' or (file.startswith('chromedriver') and not file.endswith('.txt') and not file.endswith('.md')):
-                                full_path = os.path.join(root, file)
-                                driver_candidates.append(full_path)
-                    
-                    # Find the actual executable
-                    driver_path = None
-                    for candidate in driver_candidates:
-                        if os.path.isfile(candidate):
-                            # Check if it's actually executable
-                            file_stat = os.stat(candidate)
-                            if file_stat.st_mode & stat.S_IXUSR:  # Check if user has execute permission
-                                # Additional check: make sure it's not a text file
-                                try:
-                                    with open(candidate, 'rb') as f:
-                                        header = f.read(4)
-                                        # Check if it's a binary file (not text)
-                                        if header and not header.startswith(b'#') and not header.startswith(b'<'):
-                                            driver_path = candidate
-                                            print(f"✅ Found valid ChromeDriver at: {candidate}")
-                                            break
-                                except:
-                                    continue
-                    
-                    if not driver_path:
-                        raise Exception("Could not find valid ChromeDriver executable")
-                
-                print(f"🔧 Using ChromeDriver at: {driver_path}")
-                
-                service = Service(driver_path)
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
-                print("✅ Using downloaded ChromeDriver")
+            print("🎭 Setting up Playwright...")
             
-            # Set timeouts to prevent hanging
-            self.driver.set_page_load_timeout(30)  # 30 second page load timeout
-            self.driver.implicitly_wait(10)
+            # Use sync playwright for simpler API
+            self.playwright = sync_playwright().start()
             
-            # Execute script to avoid detection
-            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            # Launch Firefox browser with minimal settings for proper web page loading
+            self.browser = self.playwright.firefox.launch(
+                headless=self.headless,
+                firefox_user_prefs={
+                    'network.proxy.type': 0,  # No proxy
+                    'network.proxy.no_proxies_on': 'localhost, 127.0.0.1',
+                    'network.http.use-cache': False,
+                    'media.volume_scale': '0.0',  # Mute audio
+                    'dom.webdriver.enabled': False,
+                    'useAutomationExtension': False,
+                    'network.trr.mode': 5,
+                },
+                args=[
+                    '--width=1920',
+                    '--height=1080',
+                    '--no-remote',
+                    '--disable-extensions'
+                ]
+            )
+            
+            # Create browser context with additional settings
+            context = self.browser.new_context(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+                viewport={'width': 1920, 'height': 1080},
+                ignore_https_errors=True,
+                java_script_enabled=True,
+                bypass_csp=True,
+                extra_http_headers={
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Cache-Control': 'max-age=0'
+                }
+            )
+            
+            # Create page
+            self.page = context.new_page()
+            
+            # Set longer timeouts for better reliability
+            self.page.set_default_timeout(60000)  # 60 seconds
+            self.page.set_default_navigation_timeout(60000)  # 60 seconds
+            
+            print("✅ Playwright setup complete")
             
         except Exception as e:
-            print(f"❌ Failed to initialize Chrome driver: {e}")
-            print("💡 Try installing ChromeDriver manually or check if Chrome is installed")
+            print(f"❌ Failed to initialize Playwright: {e}")
+            print("💡 Try running: playwright install firefox")
             raise
     
     def extract_m3u8_url(self, url):
-        """Extract .m3u8 URL from the webpage"""
-        print(f"Loading page: {url}")
+        """Extract .m3u8 URL from the webpage using Playwright"""
+        print(f"🔍 Loading page: {url}")
         
-        try:
-            # Load page with timeout handling
-            self.driver.get(url)
-            print("✅ Page loaded successfully")
-        except Exception as e:
-            print(f"⚠️ Page load issue: {e}")
-            print("🔄 Attempting to continue anyway...")
-        
-        # Wait for the page to load and JavaScript to execute
-        print("🔄 Waiting for JavaScript to load video...")
-        
-        # Progressive wait with status updates
-        for i in range(5):
-            time.sleep(1)
-            print(f"⏳ Waiting... ({i+1}/5 seconds)")
-        
-        # Try to trigger video loading by scrolling and looking for play buttons
-        print("🎬 Attempting to trigger video loading...")
-        try:
-            # Scroll down to ensure video is in viewport
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
-            time.sleep(1)
+        if not self.page:
+            print("❌ Page not initialized")
+            return []
             
-            # Look for and click play buttons
-            play_buttons = self.driver.find_elements(By.CSS_SELECTOR, 
-                "button[aria-label*='play'], button[title*='play'], .play-button, .vjs-big-play-button, [class*='play']")
-            
-            if play_buttons:
-                print(f"   Found {len(play_buttons)} potential play buttons, clicking the first one...")
-                try:
-                    play_buttons[0].click()
-                    time.sleep(2)
-                except:
-                    print("   ⚠️ Could not click play button")
-            else:
-                print("   No play buttons found")
-                
-        except Exception as e:
-            print(f"   ⚠️ Error during page interaction: {e}")
-        
-        print("🔍 Extracting video URLs from network logs...")
-        
-        # Only use Method 1 (Network logs) - it's the only one that works
         m3u8_urls = []
         
         try:
-            logs = self.driver.get_log('performance')
-            print(f"📊 Analyzing {len(logs)} network requests...")
+            # Set up network monitoring for m3u8 files BEFORE navigating
+            print("🔄 Setting up network monitoring for m3u8 files...")
             
-            for log in logs:
-                message = log['message']
-                if '.m3u8' in message:
-                    # Extract URL from log
-                    url_match = re.search(r'https?://[^\s"\']+\.m3u8[^\s"\']*', message)
-                    if url_match:
-                        m3u8_urls.append(url_match.group(0))
+            def handle_response(response):
+                if '.m3u8' in response.url:
+                    m3u8_urls.append(response.url)
+                    print(f"🎯 Found m3u8 URL: {response.url}")
+            
+            self.page.on('response', handle_response)
+            
+            # Also monitor iframe responses
+            def handle_frame_navigated(frame):
+                print(f"📺 Frame navigated: {frame.url}")
+                frame.on('response', handle_response)
+            
+            self.page.on('framenavigated', handle_frame_navigated)
+            
+            # Navigate to the page with multiple fallback strategies
+            response = None
+            navigation_strategies = [
+                {'wait_until': 'domcontentloaded', 'timeout': 45000},
+                {'wait_until': 'load', 'timeout': 45000},
+                {'wait_until': 'networkidle', 'timeout': 60000}
+            ]
+            
+            for i, strategy in enumerate(navigation_strategies, 1):
+                try:
+                    print(f"🚀 Navigation attempt {i}/3 using {strategy['wait_until']}...")
+                    print(f"🌐 Navigating to: {url}")
+                    response = self.page.goto(url, **strategy)
+                    actual_url = self.page.url
+                    print(f"📍 Actually loaded: {actual_url}")
+                    break
+                except Exception as e:
+                    print(f"⚠️ Navigation attempt {i} failed: {e}")
+                    if i == len(navigation_strategies):
+                        # If all strategies fail, try without wait condition
+                        print("🔄 Trying basic navigation without wait condition...")
+                        print(f"🌐 Final attempt to: {url}")
+                        response = self.page.goto(url, timeout=45000)
+                        actual_url = self.page.url
+                        print(f"📍 Finally loaded: {actual_url}")
+                    continue
+            
+            if response and response.status >= 400:
+                print(f"⚠️ Page returned status {response.status}")
+            
+            print("✅ Page loaded successfully")
+            
+            # Wait for iframe to load completely
+            print("⏳ Waiting for iframe to load...")
+            try:
+                self.page.wait_for_timeout(5000)  # Give iframe time to load
+            except Exception as e:
+                print(f"⚠️ Iframe wait error: {e}")
+                # Continue anyway
+            
+            # Find and interact with the video player iframe
+            try:
+                # Look for video player iframe
+                iframe_element = self.page.query_selector('iframe')
+                if iframe_element:
+                    iframe_src = iframe_element.get_attribute('src')
+                    print(f"🎬 Found iframe: {iframe_src}")
+                    
+                    # Wait for iframe to fully load
+                    try:
+                        self.page.wait_for_timeout(3000)
+                    except Exception as e:
+                        print(f"⚠️ Iframe load wait error: {e}")
+                        # Continue anyway
+                    
+                    # Multiple attempts to trigger video loading
+                    for attempt in range(3):
+                        print(f"🎬 Video trigger attempt {attempt + 1}/3")
+                        
+                        # Try clicking on the iframe area to start video
+                        try:
+                            iframe_element.click()
+                            print("🖱️ Clicked on iframe")
+                        except:
+                            pass
+                        
+                        # Also try clicking in the center of the iframe
+                        try:
+                            box = iframe_element.bounding_box()
+                            if box:
+                                center_x = box['x'] + box['width'] / 2
+                                center_y = box['y'] + box['height'] / 2
+                                self.page.mouse.click(center_x, center_y)
+                                print(f"🖱️ Clicked iframe center at ({center_x}, {center_y})")
+                        except:
+                            pass
+                        
+                        # Try double-clicking
+                        try:
+                            self.page.mouse.dblclick(center_x, center_y)
+                            print("🖱️ Double-clicked iframe center")
+                        except:
+                            pass
+                        
+                        # Try pressing space key to play
+                        try:
+                            self.page.keyboard.press('Space')
+                            print("⌨️ Pressed Space key")
+                        except:
+                            pass
+                        
+                        # Try pressing Enter key
+                        try:
+                            self.page.keyboard.press('Enter')
+                            print("⌨️ Pressed Enter key")
+                        except:
+                            pass
+                        
+                        # Wait a bit between attempts
+                        try:
+                            self.page.wait_for_timeout(2000)
+                        except:
+                            pass
+                        
+                        # Check if we got any m3u8 URLs
+                        if m3u8_urls:
+                            print(f"✅ Found URLs after attempt {attempt + 1}")
+                            break
+                        
+                # Also try general video selectors
+                video_selectors = ['video', '.play-button', '.play', '.video-play', 'button[aria-label*="play"]', '.vjs-big-play-button']
+                for selector in video_selectors:
+                    try:
+                        element = self.page.query_selector(selector)
+                        if element and element.is_visible():
+                            print(f"🖱️ Clicking on {selector}")
+                            element.click()
+                            try:
+                                self.page.wait_for_timeout(1000)
+                            except Exception as e:
+                                print(f"⚠️ Video click wait error: {e}")
+                                # Continue anyway
+                    except:
+                        continue
+                        
+            except Exception as e:
+                print(f"⚠️ Video trigger error: {e}")
+            
+            # Wait longer for video to fully load and make network requests
+            print("⏳ Waiting 10 seconds for video to load and make requests...")
+            try:
+                self.page.wait_for_timeout(10000)
+            except Exception as e:
+                print(f"⚠️ Wait timeout error: {e}")
+                # Continue anyway, we might have captured some URLs
             
             # Remove duplicates
             m3u8_urls = list(set(m3u8_urls))
             
             if m3u8_urls:
-                print(f"✅ Found {len(m3u8_urls)} unique .m3u8 URLs")
-                for i, url in enumerate(m3u8_urls, 1):
-                    print(f"   {i}. {url[:80]}..." if len(url) > 80 else f"   {i}. {url}")
-                return m3u8_urls
+                print(f"🎉 Found {len(m3u8_urls)} m3u8 URL(s)")
+                for i, found_url in enumerate(m3u8_urls, 1):
+                    print(f"   {i}. {found_url}")
             else:
-                print("❌ No .m3u8 URLs found in network logs")
-                
-                # Enhanced fallback strategy
-                print("🔄 Trying enhanced fallback strategy...")
-                
-                # Try more aggressive interactions
-                try:
-                    # Look for video elements and try to play them
-                    video_elements = self.driver.find_elements(By.TAG_NAME, 'video')
-                    if video_elements:
-                        print(f"   Found {len(video_elements)} video elements, trying to play...")
-                        for video in video_elements:
-                            try:
-                                self.driver.execute_script("arguments[0].play();", video)
-                                time.sleep(1)
-                                print("   ✅ Triggered video play")
-                            except:
-                                pass
-                    
-                    # Try clicking more button types
-                    more_buttons = self.driver.find_elements(By.CSS_SELECTOR, 
-                        "[onclick*='play'], [class*='player'], .video-player, .player-button, .start-button")
-                    
-                    if more_buttons:
-                        print(f"   Found {len(more_buttons)} additional buttons, trying to click...")
-                        for button in more_buttons[:3]:  # Try first 3
-                            try:
-                                self.driver.execute_script("arguments[0].scrollIntoView(true);", button)
-                                time.sleep(0.5)
-                                self.driver.execute_script("arguments[0].click();", button)
-                                time.sleep(1)
-                                print("   ✅ Clicked additional button")
-                            except:
-                                pass
-                    
-                    # Wait for potential async video loading
-                    print("⏳ Waiting additional 8 seconds for video to load...")
-                    time.sleep(8)
-                    
-                    # Get any new network logs generated after interactions
-                    new_logs = self.driver.get_log('performance')
-                    if new_logs:
-                        print(f"📊 Analyzing {len(new_logs)} new network requests...")
-                        for log in new_logs:
-                            message = log['message']
-                            if '.m3u8' in message:
-                                url_match = re.search(r'https?://[^\s"\']+\.m3u8[^\s"\']*', message)
-                                if url_match:
-                                    m3u8_urls.append(url_match.group(0))
-                        
-                        m3u8_urls = list(set(m3u8_urls))
-                        
-                        if m3u8_urls:
-                            print(f"✅ Enhanced fallback successful! Found {len(m3u8_urls)} .m3u8 URLs")
-                            for i, url in enumerate(m3u8_urls, 1):
-                                print(f"   {i}. {url[:80]}..." if len(url) > 80 else f"   {i}. {url}")
-                            return m3u8_urls
-                    else:
-                        print("   No new network requests captured")
-                    
-                except Exception as e:
-                    print(f"   ⚠️ Error during enhanced fallback: {e}")
-                
-                print("❌ Still no .m3u8 URLs found after enhanced fallback")
-                
-                # Final debug info
-                page_title = self.driver.title
-                current_url = self.driver.current_url
-                print(f"🔍 Debug info:")
-                print(f"   Page title: {page_title}")
-                print(f"   Current URL: {current_url}")
-                
-                if "kukaj" not in current_url.lower():
-                    print("⚠️ Page may have redirected - URL doesn't contain 'kukaj'")
-                
-                # Last resort: Check page source for any clues
-                try:
-                    page_source = self.driver.page_source
-                    if "This video is not available" in page_source or "Video not found" in page_source:
-                        print("⚠️ Video may not be available on this page")
-                    elif "loading" in page_source.lower() or "spinner" in page_source.lower():
-                        print("⚠️ Page may still be loading content")
-                    else:
-                        print("⚠️ Page content appears normal - video sources may be heavily obfuscated")
-                except:
-                    pass
-                
-                return []
+                print("❌ No m3u8 URLs found")
                 
         except Exception as e:
-            print(f"⚠️ Error accessing network logs: {e}")
-            return []
+            print(f"❌ Error extracting m3u8 URL: {e}")
+        
+        return m3u8_urls
     
     def download_with_ffmpeg(self, m3u8_url, output_filename):
-        """Download video using ffmpeg"""
-        print(f"Downloading video from: {m3u8_url}")
-        print(f"Output filename: {output_filename}")
-        
-        # Prepare ffmpeg command
-        cmd = [
-            'ffmpeg',
-            '-i', m3u8_url,
-            '-c', 'copy',  # Copy without re-encoding
-            '-bsf:a', 'aac_adtstoasc',  # Fix AAC stream if needed
-            '-y',  # Overwrite output file
-            output_filename
-        ]
-        
+        """Download m3u8 using FFmpeg"""
         try:
-            # Run ffmpeg
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            print(f"📥 Downloading with FFmpeg: {m3u8_url}")
+            
+            cmd = [
+                'ffmpeg',
+                '-i', m3u8_url,
+                '-c', 'copy',
+                '-bsf:a', 'aac_adtstoasc',
+                '-y',  # Overwrite output file
+                output_filename
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode == 0:
-                print(f"Successfully downloaded: {output_filename}")
+                print(f"✅ FFmpeg download successful: {output_filename}")
                 return True
             else:
-                print(f"FFmpeg error: {result.stderr}")
+                print(f"❌ FFmpeg failed: {result.stderr}")
                 return False
-        except subprocess.TimeoutExpired:
-            print("Download timed out after 1 hour")
-            return False
-        except FileNotFoundError:
-            print("FFmpeg not found. Please install FFmpeg.")
-            return False
+                
         except Exception as e:
-            print(f"Error during download: {e}")
+            print(f"❌ FFmpeg download error: {e}")
             return False
     
     def download_with_python(self, m3u8_url, output_filename):
-        """Download video using Python libraries (fallback method)"""
-        print(f"Downloading video using Python method from: {m3u8_url}")
-        
+        """Download m3u8 using Python requests as fallback"""
         try:
-            # Load and parse m3u8 playlist
+            print(f"🐍 Downloading with Python: {m3u8_url}")
+            
+            # Parse the m3u8 playlist
             playlist = m3u8.load(m3u8_url)
             
             if not playlist.segments:
-                print("No segments found in m3u8 playlist")
+                print("❌ No segments found in m3u8 playlist")
                 return False
             
-            # Download segments and combine
-            with open(output_filename, 'wb') as output_file:
-                for i, segment in enumerate(playlist.segments):
-                    segment_url = urljoin(m3u8_url, segment.uri)
-                    print(f"Downloading segment {i+1}/{len(playlist.segments)}: {segment_url}")
+            print(f"📋 Found {len(playlist.segments)} segments")
+            
+            # Download all segments
+            segments_data = []
+            for i, segment in enumerate(playlist.segments):
+                segment_url = segment.uri
+                if not segment_url:
+                    print(f"⚠️ No URL for segment {i+1}")
+                    continue
                     
-                    response = requests.get(segment_url, stream=True)
+                if not segment_url.startswith('http'):
+                    segment_url = urljoin(m3u8_url, segment_url)
+                
+                print(f"⬇️ Downloading segment {i+1}/{len(playlist.segments)}")
+                
+                try:
+                    response = requests.get(segment_url, timeout=10)
                     response.raise_for_status()
-                    
-                    for chunk in response.iter_content(chunk_size=8192):
-                        output_file.write(chunk)
+                    segments_data.append(response.content)
+                except Exception as e:
+                    print(f"⚠️ Error downloading segment {i+1}: {e}")
+                    continue
             
-            print(f"Successfully downloaded: {output_filename}")
-            return True
-            
+            # Combine all segments
+            if segments_data:
+                print(f"🔗 Combining {len(segments_data)} segments...")
+                with open(output_filename, 'wb') as f:
+                    for segment_data in segments_data:
+                        f.write(segment_data)
+                print(f"✅ Python download successful: {output_filename}")
+                return True
+            else:
+                print("❌ No segments downloaded")
+                return False
+                
         except Exception as e:
-            print(f"Error during Python download: {e}")
+            print(f"❌ Python download error: {e}")
             return False
     
     def download_m3u8_file(self, m3u8_url, output_filename):
-        """Download the .m3u8 file itself"""
-        print(f"Downloading .m3u8 file from: {m3u8_url}")
-        print(f"Output filename: {output_filename}")
+        """Download m3u8 file using FFmpeg or Python fallback"""
+        print(f"📥 Downloading m3u8 file: {m3u8_url}")
         
-        try:
-            response = requests.get(m3u8_url, stream=True)
-            response.raise_for_status()
-            
-            with open(output_filename, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            print(f"Successfully downloaded .m3u8 file: {output_filename}")
+        # Try FFmpeg first
+        if self.download_with_ffmpeg(m3u8_url, output_filename):
             return True
-            
-        except Exception as e:
-            print(f"Error downloading .m3u8 file: {e}")
-            return False
+        
+        # Fall back to Python if FFmpeg fails
+        print("🔄 FFmpeg failed, trying Python fallback...")
+        return self.download_with_python(m3u8_url, output_filename)
     
     def download_video(self, url, output_filename=None, convert_to_mp4=False):
-        """Main method to download video from kukaj.fi URL"""
-        try:
-            # Normalize the URL (convert other kukaj subdomains to kukaj.fi)
-            normalized_url, was_changed = normalize_kukaj_url(url)
-            if was_changed:
-                print(f"URL normalized: {url}")
-                print(f"Using: {normalized_url}")
-                print()
-                url = normalized_url
+        """Download video from kukaj.fi URL"""
+        print(f"🎬 Starting download from: {url}")
+        
+        # Normalize the URL
+        normalized_url, was_changed = normalize_kukaj_url(url)
+        if was_changed:
+            print(f"🔄 Normalized URL: {normalized_url}")
+            url = normalized_url
+        
+        # Extract m3u8 URLs
+        m3u8_urls = self.extract_m3u8_url(url)
+        
+        if not m3u8_urls:
+            print("❌ No video URLs found")
+            return False
+        
+        # Use the first m3u8 URL found
+        m3u8_url = m3u8_urls[0]
+        print(f"📹 Using video URL: {m3u8_url}")
+        
+        # Generate output filename if not provided
+        if not output_filename:
+            # Extract filename from URL
+            parsed_url = urlparse(url)
+            path_parts = parsed_url.path.strip('/').split('/')
             
-            # Extract m3u8 URLs
-            m3u8_urls = self.extract_m3u8_url(url)
-            
-            if not m3u8_urls:
-                print("No .m3u8 URLs found on the page")
-                return False
-            
-            print(f"Found {len(m3u8_urls)} .m3u8 URL(s):")
-            for i, m3u8_url in enumerate(m3u8_urls, 1):
-                print(f"  {i}. {m3u8_url}")
-            
-            # Use the first m3u8 URL found
-            m3u8_url = m3u8_urls[0]
-            
-            # Generate output filename if not provided
-            if not output_filename:
-                parsed_url = urlparse(url)
-                path_parts = parsed_url.path.strip('/').split('/')
-                if len(path_parts) >= 2:
-                    base_name = f"{path_parts[-2]}_{path_parts[-1]}"
+            if len(path_parts) >= 2:
+                # For URLs like https://serial.kukaj.fi/show/S01E01
+                if len(path_parts) >= 3:
+                    filename = f"{path_parts[-2]}_{path_parts[-1]}"
                 else:
-                    base_name = "downloaded_video"
-                
-                if convert_to_mp4:
-                    output_filename = f"{base_name}.mp4"
-                else:
-                    output_filename = f"{base_name}.m3u8"
-            
-            # Download based on the requested format
-            if convert_to_mp4:
-                # Try downloading with ffmpeg first, then fallback to Python method
-                if self.download_with_ffmpeg(m3u8_url, output_filename):
-                    return True
-                else:
-                    print("FFmpeg download failed, trying Python method...")
-                    return self.download_with_python(m3u8_url, output_filename)
+                    filename = path_parts[-1]
             else:
-                # Download just the .m3u8 file
-                return self.download_m3u8_file(m3u8_url, output_filename)
+                filename = path_parts[-1] if path_parts else "video"
+            
+            # Clean filename
+            filename = re.sub(r'[^\w\-_\.]', '_', filename)
+            output_filename = f"{filename}.m3u8"
+        
+        # Ensure we're saving to the downloads directory
+        downloads_dir = os.path.join(os.getcwd(), 'downloads')
+        os.makedirs(downloads_dir, exist_ok=True)
+        
+        # Update output filename to include downloads directory
+        if not output_filename.startswith(downloads_dir):
+            output_filename = os.path.join(downloads_dir, os.path.basename(output_filename))
+        
+        print(f"💾 Output filename: {output_filename}")
+        
+        # Download the video
+        success = self.download_m3u8_file(m3u8_url, output_filename)
+        
+        if success:
+            print(f"✅ Download completed: {output_filename}")
+            
+            # Convert to MP4 if requested
+            if convert_to_mp4:
+                mp4_filename = output_filename.replace('.m3u8', '.mp4')
+                print(f"🔄 Converting to MP4: {mp4_filename}")
                 
-        except Exception as e:
-            print(f"Error during download: {e}")
+                cmd = [
+                    'ffmpeg',
+                    '-i', output_filename,
+                    '-c', 'copy',
+                    '-y',
+                    mp4_filename
+                ]
+                
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode == 0:
+                        print(f"✅ MP4 conversion successful: {mp4_filename}")
+                        return mp4_filename
+                    else:
+                        print(f"⚠️ MP4 conversion failed: {result.stderr}")
+                        return output_filename
+                except Exception as e:
+                    print(f"⚠️ MP4 conversion error: {e}")
+                    return output_filename
+            
+            return output_filename
+        else:
+            print("❌ Download failed")
             return False
     
     def close(self):
-        """Close the WebDriver"""
-        if self.driver:
-            self.driver.quit()
+        """Close browser and cleanup"""
+        if self.browser:
+            self.browser.close()
+        if self.playwright:
+            self.playwright.stop()
     
     def __enter__(self):
         return self
@@ -494,62 +497,118 @@ class KukajDownloader:
 
 
 def main():
-    """Main function to run the downloader"""
-    import sys
+    """Main function for command line usage"""
     import argparse
     
-    # Create argument parser
-    parser = argparse.ArgumentParser(
-        description="Download videos from kukaj domains (downloads .m3u8 by default)\nSupports kukaj.fi, kukaj.io, kukaj.in and other subdomains",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python kukaj_downloader.py https://serial.kukaj.fi/hra-na-olihen/S03E04
-  python kukaj_downloader.py https://serial.kukaj.io/hra-na-olihen/S03E04 --mp4
-  python kukaj_downloader.py https://serial.kukaj.in/hra-na-olihen/S03E04 -o episode.m3u8
-  python kukaj_downloader.py https://serial.kukaj.fi/hra-na-olihen/S03E04 --mp4 -o episode.mp4
-
-Note: Other kukaj subdomains (kukaj.io, kukaj.in, etc.) will be automatically 
-      converted to kukaj.fi for compatibility.
-        """
-    )
-    
-    parser.add_argument('url', help='The kukaj.fi URL to download from')
-    parser.add_argument('-o', '--output', help='Output filename (optional)')
-    parser.add_argument('--mp4', action='store_true', 
-                       help='Convert to MP4 format (default: download .m3u8 file)')
-    parser.add_argument('--headless', action='store_true', default=True,
-                       help='Run browser in headless mode (default: True)')
-    parser.add_argument('--no-headless', action='store_true', 
-                       help='Run browser with GUI (for debugging)')
+    parser = argparse.ArgumentParser(description='Download videos from kukaj.fi')
+    parser.add_argument('url', help='kukaj.fi video URL')
+    parser.add_argument('-o', '--output', help='Output filename')
+    parser.add_argument('--headless', action='store_true', help='Run in headless mode')
+    parser.add_argument('--mp4', action='store_true', help='Convert to MP4 after download')
     
     args = parser.parse_args()
     
-    # Determine headless mode
-    headless = args.headless and not args.no_headless
-    
-    print("Kukaj.fi Video Downloader")
-    print("=" * 40)
-    
-    if args.mp4:
-        print("Mode: Download and convert to MP4")
-    else:
-        print("Mode: Download .m3u8 file")
-    
-    print(f"URL: {args.url}")
-    if args.output:
-        print(f"Output: {args.output}")
-    print()
-    
-    with KukajDownloader(headless=headless) as downloader:
-        success = downloader.download_video(args.url, args.output, args.mp4)
-        
-        if success:
-            print("\nDownload completed successfully!")
-        else:
-            print("\nDownload failed!")
-            sys.exit(1)
+    try:
+        with KukajDownloader(headless=args.headless) as downloader:
+            success = downloader.download_video(
+                args.url, 
+                output_filename=args.output,
+                convert_to_mp4=args.mp4
+            )
+            
+            if success:
+                print(f"🎉 Success! Downloaded: {success}")
+            else:
+                print("❌ Download failed")
+                exit(1)
+                
+    except KeyboardInterrupt:
+        print("\n⚠️ Download interrupted by user")
+        exit(1)
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        exit(1)
 
 
 if __name__ == "__main__":
-    main() 
+    main()
+
+
+# ---------------------------------------------------------------------------
+URL           = "https://film.kukaj.fi/matrix"   # <-- any Kukaj* URL
+HEADLESS      = False                           # set True for Termux / CI
+WAIT_SECONDS  = 15                              # time to wait for video JS
+DOWNLOAD_DIR  = Path("downloads")
+# ---------------------------------------------------------------------------
+
+
+async def main():
+    DOWNLOAD_DIR.mkdir(exist_ok=True)
+
+    async with async_playwright() as p:
+        browser = await p.firefox.launch(
+            headless=HEADLESS,
+            firefox_user_prefs={
+                # IMPORTANT: all proxies off – avoids "0.0.7.128" detour
+                "network.proxy.type": 0,
+                "network.proxy.no_proxies_on": "",
+                # Disable DOH / TRR so normal system DNS is used
+                "network.trr.mode": 5,
+            },
+            # Keep the args list short – many chromium-only flags break Firefox
+            args=["--width=1920", "--height=1080"],
+        )
+
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) "
+                "Gecko/20100101 Firefox/120.0"
+            ),
+            viewport={"width": 1920, "height": 1080},
+            ignore_https_errors=True,
+        )
+
+        page = await context.new_page()
+
+        m3u8_urls = []
+
+        # --- network listeners ------------------------------------------------
+        async def sniff(route_or_resp):
+            url = route_or_resp.url
+            if ".m3u8" in url:
+                if url not in m3u8_urls:
+                    m3u8_urls.append(url)
+                    print(f"🎯  m3u8 →  {url}")
+
+        page.on("request", sniff)
+        page.on("response", sniff)
+
+        # all future iframes inherit the listeners
+        context.on("page", lambda new_page: (
+            new_page.on("request", sniff),
+            new_page.on("response", sniff),
+        ))
+
+        print(f"🌐  GOTO  {URL}")
+        await page.goto(URL, wait_until="domcontentloaded", timeout=60_000)
+
+        # give the site (and hidden iframes) some time to run JS
+        print(f"⏳  waiting {WAIT_SECONDS}s for video player …")
+        await page.wait_for_timeout(WAIT_SECONDS * 1000)
+
+        # ---------------------------------------------------------------------
+        if m3u8_urls:
+            best = m3u8_urls[0]
+            print(f"\n✅  first m3u8: {best}")
+            # OPTIONAL: download straight away with ffmpeg --------------------
+            out = DOWNLOAD_DIR / (urlparse(URL).path.strip("/").replace("/", "_") + ".m3u8")
+            print(f"⬇️   saving playlist to  {out}")
+            out.write_text(await (await context.request.get(best)).text())
+        else:
+            print("\n❌  no m3u8 found – try a longer wait or check the site")
+
+        await browser.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main()) 
