@@ -207,50 +207,45 @@ class WebDownloader(KukajDownloader):
             
             self.emit_progress("🎬 Converting to MP4... (0%)", "info")
             
-            # Try multiple methods to get total frames/duration
-            total_frames = None
-            duration = None
-            
-            # Method 1: Try ffprobe for total frames
+            import json
+            total_frames: int | None = None
+            duration: float | None = None
+
             probe_cmd = [
-                'ffprobe',
-                '-v', 'quiet',
-                '-count_frames',
-                '-select_streams', 'v:0',
-                '-show_entries', 'stream=nb_frames,duration',
-                '-of', 'csv=p=0',
-                m3u8_url
+                'ffprobe', '-v', 'quiet',
+                '-print_format', 'json',
+                '-show_streams', '-show_format', m3u8_url
             ]
-            
             try:
-                probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=15)
-                if probe_result.returncode == 0 and probe_result.stdout.strip():
-                    lines = probe_result.stdout.strip().split('\n')
-                    for line in lines:
-                        parts = line.split(',')
-                        if len(parts) >= 2:
-                            try:
-                                nb_frames = parts[0].strip()
-                                duration_str = parts[1].strip()
-                                if nb_frames and nb_frames != 'N/A':
-                                    total_frames = int(nb_frames)
-                                    break
-                                elif duration_str and duration_str != 'N/A':
-                                    duration = float(duration_str)
-                            except (ValueError, IndexError):
-                                continue
+                probe = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=15)
+                if probe.returncode == 0 and probe.stdout:
+                    meta = json.loads(probe.stdout)
+                    # duration from format
+                    duration = float(meta.get('format', {}).get('duration', 0)) or None
+                    # pick first video stream
+                    for st in meta.get('streams', []):
+                        if st.get('codec_type') == 'video':
+                            if st.get('nb_frames') and st['nb_frames'] != '0':
+                                total_frames = int(st['nb_frames'])
+                                break
+                            # else compute from avg_frame_rate
+                            afr = st.get('avg_frame_rate') or st.get('r_frame_rate')
+                            if afr and afr != '0/0' and duration:
+                                try:
+                                    num, den = afr.split('/')
+                                    fps = float(num) / float(den) if float(den) != 0 else 0
+                                    if fps:
+                                        total_frames = int(duration * fps)
+                                except Exception:
+                                    pass
+                            break
             except Exception:
                 pass
-            
-            # Method 2: If no frame count, estimate from duration and typical frame rate
-            if not total_frames and duration:
-                estimated_fps = 25  # Conservative estimate
-                total_frames = int(duration * estimated_fps)
+
+            if total_frames:
                 self.emit_progress(f"🎬 Converting to MP4... (estimated {total_frames} frames)", "info")
-            
-            # Method 3: Fallback - use a reasonable default
-            if not total_frames:
-                total_frames = 5000  # Conservative default for progress tracking
+            else:
+                total_frames = 5000  # fallback
                 self.emit_progress("🎬 Converting to MP4... (estimating progress)", "info")
             
             # Prepare ffmpeg command with detailed progress
@@ -292,6 +287,10 @@ class WebDownloader(KukajDownloader):
                                 
                                 # Calculate progress - ensure smooth increments
                                 if total_frames > 0:
+                                    # Dynamically enlarge total_frames if we underestimated
+                                    if current_frame > total_frames:
+                                        # Assume at least 20% more frames remain
+                                        total_frames = int(current_frame * 1.2)
                                     progress = min(int((current_frame / total_frames) * 100), 99)
                                     
                                     # Emit progress for EVERY percentage increase (smooth 1%, 2%, 3%...)
