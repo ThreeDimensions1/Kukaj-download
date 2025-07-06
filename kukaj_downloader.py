@@ -60,12 +60,20 @@ def normalize_kukaj_url(url):
 
 
 class KukajDownloader:
-    def __init__(self, headless=True):
+    def __init__(self, headless=True, wait_sec: int = 12, verbose=False):
+        """Downloader
+
+        wait_sec – how many seconds to passively wait after navigation so that the
+        video player has time to start issuing HLS (.m3u8) requests. 12 s has
+        proven enough for Kukaj.
+        """
         self.headless = headless
+        self.wait_sec = wait_sec
         self.playwright = None
         self.browser = None
         self.page = None
         self.context = None
+        self.verbose = verbose
         self.setup_playwright()
     
     def setup_playwright(self):
@@ -138,158 +146,31 @@ class KukajDownloader:
         m3u8_urls = []
         
         try:
-            # Set up network monitoring for m3u8 files BEFORE navigating
-            print("🔄 Setting up network monitoring for m3u8 files...")
-            
-            def handle_response(response):
-                if '.m3u8' in response.url:
-                    m3u8_urls.append(response.url)
-                    print(f"🎯 Found m3u8 URL: {response.url}")
-            
-            self.page.on('response', handle_response)
-            
-            # Also monitor iframe responses
-            def handle_frame_navigated(frame):
-                print(f"📺 Frame navigated: {frame.url}")
-                frame.on('response', handle_response)
-            
-            self.page.on('framenavigated', handle_frame_navigated)
-            
-            # Navigate to the page with multiple fallback strategies
-            response = None
-            navigation_strategies = [
-                {'wait_until': 'domcontentloaded', 'timeout': 45000},
-                {'wait_until': 'load', 'timeout': 45000},
-                {'wait_until': 'networkidle', 'timeout': 60000}
-            ]
-            
-            for i, strategy in enumerate(navigation_strategies, 1):
-                try:
-                    print(f"🚀 Navigation attempt {i}/3 using {strategy['wait_until']}...")
-                    print(f"🌐 Navigating to: {url}")
-                    response = self.page.goto(url, **strategy)
-                    actual_url = self.page.url
-                    print(f"📍 Actually loaded: {actual_url}")
-                    break
-                except Exception as e:
-                    print(f"⚠️ Navigation attempt {i} failed: {e}")
-                    if i == len(navigation_strategies):
-                        # If all strategies fail, try without wait condition
-                        print("🔄 Trying basic navigation without wait condition...")
-                        print(f"🌐 Final attempt to: {url}")
-                        response = self.page.goto(url, timeout=45000)
-                        actual_url = self.page.url
-                        print(f"📍 Finally loaded: {actual_url}")
-                    continue
+            # Monitor context-wide (top page + iframes) for *.m3u8 requests.
+            print("🔄 Setting up context-wide m3u8 sniffing …")
+            ctx = self.page.context
+
+            def _sniff(route_or_resp):
+                u = route_or_resp.url
+                if '.m3u8' in u and u not in m3u8_urls:
+                    m3u8_urls.append(u)
+                    print(f"🎯 Found m3u8 URL: {u}")
+
+            ctx.on('request', _sniff)
+            ctx.on('response', _sniff)
+
+            print(f"🌐 GOTO {url}")
+            response = self.page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            print(f"📍 Page status: {response.status if response else 'unknown'}")
             
             if response and response.status >= 400:
                 print(f"⚠️ Page returned status {response.status}")
             
             print("✅ Page loaded successfully")
             
-            # Wait for iframe to load completely
-            print("⏳ Waiting for iframe to load...")
-            try:
-                self.page.wait_for_timeout(5000)  # Give iframe time to load
-            except Exception as e:
-                print(f"⚠️ Iframe wait error: {e}")
-                # Continue anyway
-            
-            # Find and interact with the video player iframe
-            try:
-                # Look for video player iframe
-                iframe_element = self.page.query_selector('iframe')
-                if iframe_element:
-                    iframe_src = iframe_element.get_attribute('src')
-                    print(f"🎬 Found iframe: {iframe_src}")
-                    
-                    # Wait for iframe to fully load
-                    try:
-                        self.page.wait_for_timeout(3000)
-                    except Exception as e:
-                        print(f"⚠️ Iframe load wait error: {e}")
-                        # Continue anyway
-                    
-                    # Multiple attempts to trigger video loading
-                    for attempt in range(3):
-                        print(f"🎬 Video trigger attempt {attempt + 1}/3")
-                        
-                        # Try clicking on the iframe area to start video
-                        try:
-                            iframe_element.click()
-                            print("🖱️ Clicked on iframe")
-                        except:
-                            pass
-                        
-                        # Also try clicking in the center of the iframe
-                        try:
-                            box = iframe_element.bounding_box()
-                            if box:
-                                center_x = box['x'] + box['width'] / 2
-                                center_y = box['y'] + box['height'] / 2
-                                self.page.mouse.click(center_x, center_y)
-                                print(f"🖱️ Clicked iframe center at ({center_x}, {center_y})")
-                        except:
-                            pass
-                        
-                        # Try double-clicking
-                        try:
-                            self.page.mouse.dblclick(center_x, center_y)
-                            print("🖱️ Double-clicked iframe center")
-                        except:
-                            pass
-                        
-                        # Try pressing space key to play
-                        try:
-                            self.page.keyboard.press('Space')
-                            print("⌨️ Pressed Space key")
-                        except:
-                            pass
-                        
-                        # Try pressing Enter key
-                        try:
-                            self.page.keyboard.press('Enter')
-                            print("⌨️ Pressed Enter key")
-                        except:
-                            pass
-                        
-                        # Wait a bit between attempts
-                        try:
-                            self.page.wait_for_timeout(2000)
-                        except:
-                            pass
-                        
-                        # Check if we got any m3u8 URLs
-                        if m3u8_urls:
-                            print(f"✅ Found URLs after attempt {attempt + 1}")
-                            break
-                        
-                # Also try general video selectors
-                video_selectors = ['video', '.play-button', '.play', '.video-play', 'button[aria-label*="play"]', '.vjs-big-play-button']
-                for selector in video_selectors:
-                    try:
-                        element = self.page.query_selector(selector)
-                        if element and element.is_visible():
-                            print(f"🖱️ Clicking on {selector}")
-                            element.click()
-                            try:
-                                self.page.wait_for_timeout(1000)
-                            except Exception as e:
-                                print(f"⚠️ Video click wait error: {e}")
-                                # Continue anyway
-                    except:
-                        continue
-                        
-            except Exception as e:
-                print(f"⚠️ Video trigger error: {e}")
-            
-            # Wait longer for video to fully load and make network requests
-            print("⏳ Waiting 10 seconds for video to load and make requests...")
-            try:
-                self.page.wait_for_timeout(10000)
-            except Exception as e:
-                print(f"⚠️ Wait timeout error: {e}")
-                # Continue anyway, we might have captured some URLs
+            # Passive wait – no clicking needed, rely on network listeners
+            print(f"⌛ Passive wait {self.wait_sec}s for HLS requests …")
+            self.page.wait_for_timeout(self.wait_sec * 1000)
             
             # Remove duplicates
             m3u8_urls = list(set(m3u8_urls))
