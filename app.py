@@ -66,7 +66,7 @@ def save_history():
     except Exception as e:
         print(f"⚠️ Error saving history: {e}")
 
-def add_to_history(url, filename, success=True):
+def add_to_history(url, filename, success=True, convert_to_mp4=False):
     """Add download to history"""
     global download_history
     # Extract movie/series name from URL
@@ -88,12 +88,16 @@ def add_to_history(url, filename, success=True):
     # Clean display name
     display_name = re.sub(r'[_-]', ' ', display_name).title()
     
+    # Remove any existing entry with the same URL to avoid duplicates
+    download_history = [entry for entry in download_history if entry.get('url') != url]
+    
     history_entry = {
         'url': url,
         'filename': filename,
         'display_name': display_name,
         'date': datetime.now().isoformat(),
         'success': success,
+        'convert_to_mp4': convert_to_mp4,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
@@ -482,7 +486,7 @@ def start_download():
                     
                     actual_filename = f"{base_name}.{'mp4' if convert_to_mp4 else 'm3u8'}"
                 
-                add_to_history(url, os.path.basename(actual_filename) if actual_filename else None, success)
+                add_to_history(url, os.path.basename(actual_filename) if actual_filename else None, success, convert_to_mp4)
                 
                 # Clean up
                 if session_id in active_downloads:
@@ -565,6 +569,31 @@ def download_file(filename):
 def get_history():
     """Get download history"""
     return jsonify({'history': download_history})
+
+@app.route('/api/history/clear', methods=['POST'])
+def clear_history_endpoint():
+    """Clear the entire download history"""
+    global download_history
+    download_history = []
+    save_history()
+    return jsonify({'success': True, 'message': 'History cleared'})
+
+@app.route('/api/history/delete', methods=['POST'])
+def delete_history_item():
+    """Delete a specific history entry identified by its URL"""
+    global download_history
+    data = request.json or {}
+    url_to_delete = data.get('url')
+    if not url_to_delete:
+        return jsonify({'error': 'URL is required'}), 400
+
+    original_len = len(download_history)
+    download_history = [entry for entry in download_history if entry.get('url') != url_to_delete]
+    if len(download_history) == original_len:
+        return jsonify({'error': 'Entry not found'}), 404
+
+    save_history()
+    return jsonify({'success': True, 'message': 'Entry removed'})
 
 @socketio.on('connect')
 def handle_connect():

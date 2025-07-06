@@ -1,162 +1,56 @@
 [
   {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.mp4",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T19:01:27.765803",
-    "success": true,
-    "timestamp": "2025-07-06 19:01:27"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.m3u8",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:58:59.969324",
-    "success": true,
-    "timestamp": "2025-07-06 18:58:59"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.mp4",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:58:27.149705",
+    "url": "https://serial.kukaj.fi/hra-na-olihen/S01E04",
+    "filename": "hra-na-olihen_S01E04.m3u8",
+    "display_name": "Hra Na Olihen   S01E04",
+    "date": "2025-07-06T19:55:20.439479",
     "success": false,
-    "timestamp": "2025-07-06 18:58:27"
+    "convert_to_mp4": false,
+    "timestamp": "2025-07-06 19:55:20"
   },
   {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.mp4",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:55:26.386411",
+    "url": "https://serial.kukaj.fi/hra-na-olihen/S01E03",
+    "filename": "hra-na-olihen_S01E03.m3u8",
+    "display_name": "Hra Na Olihen   S01E03",
+    "date": "2025-07-06T19:54:20.138836",
     "success": true,
-    "timestamp": "2025-07-06 18:55:26"
+    "convert_to_mp4": false,
+    "timestamp": "2025-07-06 19:54:20"
   },
   {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.mp4",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:50:35.463192",
-    "success": true,
-    "timestamp": "2025-07-06 18:50:35"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.mp4",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:49:34.028875",
-    "success": true,
-    "timestamp": "2025-07-06 18:49:34"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.mp4",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:25:17.427541",
-    "success": true,
-    "timestamp": "2025-07-06 18:25:17"
-  },
-  {
-    "url": "https://film.kukaj.fi/matrix",
-    "filename": "matrix.m3u8",
-    "display_name": "Matrix",
-    "date": "2025-07-06T18:20:46.715399",
-    "success": true,
-    "timestamp": "2025-07-06 18:20:46"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.m3u8",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:20:10.057670",
-    "success": true,
-    "timestamp": "2025-07-06 18:20:10"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.m3u8",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:16:13.848892",
-    "success": true,
-    "timestamp": "2025-07-06 18:16:13"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.m3u8",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T18:11:13.824456",
-    "success": true,
-    "timestamp": "2025-07-06 18:11:13"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.m3u8",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-06T10:46:42.651507",
-    "success": true,
-    "timestamp": "2025-07-06 10:46:42"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.m3u8",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-05T18:48:46.244693",
+    "url": "https://serial.kukaj.fi/hra-na-olihen/S01E02",
+    "filename": "hra-na-olihen_S01E02.m3u8",
+    "display_name": "Hra Na Olihen   S01E02",
+    "date": "2025-07-06T19:49:51.843512",
     "success": false,
-    "timestamp": "2025-07-05 18:48:46"
+    "convert_to_mp4": false,
+    "timestamp": "2025-07-06 19:49:51"
+  },
+  {
+    "url": "https://serial.kukaj.fi/hra-na-olihen/S01E01",
+    "filename": "hra-na-olihen_S01E01.m3u8",
+    "display_name": "Hra Na Olihen   S01E01",
+    "date": "2025-07-06T19:49:02.356067",
+    "success": true,
+    "convert_to_mp4": false,
+    "timestamp": "2025-07-06 19:49:02"
+  },
+  {
+    "url": "https://film.kukaj.fi/matrix",
+    "filename": "matrix.m3u8",
+    "display_name": "Matrix",
+    "date": "2025-07-06T19:48:32.775693",
+    "success": true,
+    "convert_to_mp4": false,
+    "timestamp": "2025-07-06 19:48:32"
   },
   {
     "url": "https://film.kukaj.fi/big-buck-bunny",
     "filename": "big-buck-bunny.m3u8",
     "display_name": "Big Buck Bunny",
-    "date": "2025-07-04T19:44:22.108941",
+    "date": "2025-07-06T19:47:25.196007",
     "success": true,
-    "timestamp": "2025-07-04 19:44:22"
-  },
-  {
-    "url": "https://film.kukaj.fi/matrix",
-    "filename": "matrix.m3u8",
-    "display_name": "Matrix",
-    "date": "2025-07-04T19:41:51.420840",
-    "success": true,
-    "timestamp": "2025-07-04 19:41:51"
-  },
-  {
-    "url": "https://film.kukaj.fi/matrix",
-    "filename": "matrix.m3u8",
-    "display_name": "Ja Som Test",
-    "date": "2025-07-04T19:38:33.232752",
-    "success": true,
-    "timestamp": "2025-07-04 19:38:33"
-  },
-  {
-    "url": "https://film.kukaj.fi/matrix",
-    "filename": "matrix.m3u8",
-    "display_name": "Matrix",
-    "date": "2025-07-04T19:38:00.198268",
-    "success": false,
-    "timestamp": "2025-07-04 19:38:00"
-  },
-  {
-    "url": "https://film.kukaj.fi/matrix",
-    "filename": "matrix.m3u8",
-    "display_name": "Matrix",
-    "date": "2025-07-04T19:37:10.901850",
-    "success": false,
-    "timestamp": "2025-07-04 19:37:10"
-  },
-  {
-    "url": "https://film.kukaj.fi/big-buck-bunny",
-    "filename": "big-buck-bunny.mp4",
-    "display_name": "Big Buck Bunny",
-    "date": "2025-07-04T18:43:52.544526",
-    "success": true,
-    "timestamp": "2025-07-04 18:43:52"
-  },
-  {
-    "url": "https://film.kukaj.fi/matrix",
-    "filename": "matrix.m3u8",
-    "display_name": "Matrix",
-    "date": "2025-07-04T18:40:20.558998",
-    "success": true,
-    "timestamp": "2025-07-04 18:40:20"
+    "convert_to_mp4": false,
+    "timestamp": "2025-07-06 19:47:25"
   }
 ]

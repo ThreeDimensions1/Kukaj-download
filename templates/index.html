@@ -92,6 +92,7 @@
             grid-template-columns: 1fr 1fr;
             gap: 2rem;
             margin-bottom: 2rem;
+            align-items: flex-start;
         }
 
         .card {
@@ -198,6 +199,33 @@
             display: flex;
             flex-direction: column;
             gap: 1rem;
+            /* Limit height and enable scrolling */
+            max-height: 65vh;
+            overflow-y: auto;
+            padding-right: 4px; /* space for scrollbar */
+        }
+
+        .card.scrollable {
+            max-height: 75vh;
+            overflow-y: auto;
+        }
+
+        .btn-danger {
+            background: var(--error-color);
+            color: #ffffff;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #dc2626;
+            color: #ffffff;
+            transform: translateY(-1px);
+        }
+
+        .btn-icon {
+            padding: 0.5rem;
+            min-width: 0;
+            width: 34px;
+            height: 34px;
         }
 
         .history-item {
@@ -581,8 +609,11 @@
                 </form>
             </div>
 
-            <div class="card">
-                <h2><i class="fas fa-history"></i> History</h2>
+            <div class="card scrollable" id="historyCard">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+                    <h2 style="display:flex;align-items:center;gap:0.5rem;"><i class="fas fa-history"></i> History</h2>
+                    <button class="btn btn-danger btn-icon" id="clearHistoryBtn" title="Clear history"><i class="fas fa-trash-alt"></i></button>
+                </div>
                 <div class="history-list" id="historyList">
                     <div class="empty-state">
                         <i class="fas fa-history"></i>
@@ -735,6 +766,11 @@
                 this.socket.on('files_updated', (data) => {
                     this.loadHistory();
                 });
+
+                const clearBtn = document.getElementById('clearHistoryBtn');
+                if (clearBtn) {
+                    clearBtn.addEventListener('click', () => this.clearHistory());
+                }
             }
             
             async handleSubmit(e) {
@@ -1069,7 +1105,17 @@
             }
             
             displayHistory() {
-                if (this.downloadHistory.length === 0) {
+                // Deduplicate by URL (keep most recent)
+                const seen = new Set();
+                const uniqueHistory = [];
+                for (const item of this.downloadHistory) {
+                    if (!seen.has(item.url)) {
+                        uniqueHistory.push(item);
+                        seen.add(item.url);
+                    }
+                }
+
+                if (uniqueHistory.length === 0) {
                     this.historyList.innerHTML = `
                         <div class="empty-state">
                             <i class="fas fa-history"></i>
@@ -1078,8 +1124,7 @@
                     `;
                     return;
                 }
-                
-                this.historyList.innerHTML = this.downloadHistory.map(item => `
+                this.historyList.innerHTML = uniqueHistory.map(item => `
                     <div class="history-item">
                         <div class="history-info">
                             <div class="history-icon ${item.convert_to_mp4 ? 'mp4' : 'm3u8'}">
@@ -1098,6 +1143,9 @@
                             </button>
                             <button class="btn btn-secondary btn-small" onclick="app.redownloadVideo('${item.url}', true)">
                                 <i class="fas fa-download"></i> mp4
+                            </button>
+                            <button class="btn btn-danger btn-icon" onclick="app.deleteHistoryItem('${item.url}')" title="Remove from history">
+                                <i class="fas fa-times"></i>
                             </button>
                         </div>
                     </div>
@@ -1151,6 +1199,42 @@
                 const sizes = ['Bytes', 'KB', 'MB', 'GB'];
                 const i = Math.floor(Math.log(bytes) / Math.log(k));
                 return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+
+            async clearHistory() {
+                if (!confirm('Are you sure you want to clear the entire download history?')) return;
+                try {
+                    const res = await fetch('/api/history/clear', { method: 'POST' });
+                    const data = await res.json();
+                    if (res.ok) {
+                        this.downloadHistory = [];
+                        this.displayHistory();
+                    } else {
+                        alert(data.error || 'Failed to clear history');
+                    }
+                } catch (err) {
+                    console.error(err);
+                }
+            }
+
+            async deleteHistoryItem(url) {
+                try {
+                    const res = await fetch('/api/history/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        // Remove locally and re-render
+                        this.downloadHistory = this.downloadHistory.filter(item => item.url !== url);
+                        this.displayHistory();
+                    } else {
+                        alert(data.error || 'Failed to remove item');
+                    }
+                } catch (err) {
+                    console.error(err);
+                }
             }
         }
         
