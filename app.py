@@ -131,7 +131,7 @@ class WebDownloader(KukajDownloader):
             'timestamp': datetime.now().strftime('%H:%M:%S')
         }, room=self.session_id)
     
-    def download_video(self, url, output_filename=None, convert_to_mp4=False):
+    def download_video(self, url, output_filename=None, convert_to_mp4=False, source=None):
         """Override to add progress updates"""
         try:
             self.emit_progress("🔄 Starting download process...", "info")
@@ -143,18 +143,25 @@ class WebDownloader(KukajDownloader):
                 self.emit_progress(f"📍 Using: {normalized_url}", "success")
                 url = normalized_url
             
-            # Extract m3u8 URLs
+            # Extract media URLs (m3u8 or mp4)
             self.emit_progress("🔍 Extracting video URLs...", "info")
-            m3u8_urls = self.extract_m3u8_url(url)
-            
-            if not m3u8_urls:
+            media_urls = self.extract_media_urls(url, source)
+
+            if not media_urls:
                 self.emit_progress("❌ No video URLs found", "error")
                 return False
-            
-            self.emit_progress(f"✅ Found {len(m3u8_urls)} video URL(s)", "success")
-            
-            # Use the first m3u8 URL found
-            m3u8_url = m3u8_urls[0]
+
+            self.emit_progress(f"✅ Found {len(media_urls)} video URL(s)", "success")
+
+            # Prefer .m3u8 over .mp4
+            preferred_order = [
+                lambda u: u.lower().endswith('.m3u8'),
+                lambda u: '.m3u8' in u.lower(),
+                lambda u: u.lower().endswith('.mp4'),
+                lambda u: '.mp4' in u.lower(),
+            ]
+            media_urls.sort(key=lambda u: next((i for i, f in enumerate(preferred_order) if f(u)), 999))
+            media_url = media_urls[0]
             
             # Generate output filename if not provided
             if not output_filename:
@@ -162,34 +169,36 @@ class WebDownloader(KukajDownloader):
                 parsed_url = urlparse(url)
                 path_parts = parsed_url.path.strip('/').split('/')
                 
-                # Better filename generation
                 if len(path_parts) >= 1 and path_parts[-1]:
-                    # For URLs like /matrix or /series/S01E01
                     if len(path_parts) >= 2 and path_parts[-2] not in ['film', 'serial']:
-                        # For series URLs like /series-name/S01E01
                         base_name = f"{path_parts[-2]}_{path_parts[-1]}"
                     else:
-                        # For film URLs like /matrix
                         base_name = path_parts[-1]
                 else:
                     base_name = "downloaded_video"
-                
-                # Clean up filename (remove special characters)
+
                 import re
                 base_name = re.sub(r'[^\w\-_.]', '_', base_name)
-                
-                if convert_to_mp4:
-                    output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}.mp4")
+
+                # Decide extension – if convert_to_mp4 OR preferred source appears to be mp4, save as mp4
+                if convert_to_mp4 or (source and source.upper() in ['TAP', 'MIX']):
+                    ext = 'mp4'
                 else:
-                    output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}.m3u8")
+                    ext = 'm3u8'
+                output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}{ext}")
             
-            # Download based on the requested format
-            if convert_to_mp4:
-                self.emit_progress("🎬 Converting to MP4...", "info")
-                success = self._download_with_progress_mp4(m3u8_url, output_filename)
+            # Download
+            if '.m3u8' in media_url.lower():
+                if convert_to_mp4:
+                    self.emit_progress("🎬 Converting to MP4...", "info")
+                    success = self._download_with_progress_mp4(media_url, output_filename)
+                else:
+                    self.emit_progress("📁 Downloading .m3u8 file...", "info")
+                    success = self._download_with_progress_m3u8(media_url, output_filename)
             else:
-                self.emit_progress("📁 Downloading .m3u8 file...", "info")
-                success = self._download_with_progress_m3u8(m3u8_url, output_filename)
+                # Direct MP4
+                self.emit_progress("📥 Downloading MP4...", "info")
+                success = self._download_with_progress_mp4(media_url, output_filename)
             
             if success:
                 self.emit_progress(f"🎉 Download completed: {output_filename}", "success")
@@ -431,6 +440,7 @@ def start_download():
     url = data.get('url', '').strip()
     output_filename = data.get('filename', '').strip()
     convert_to_mp4 = data.get('convert_to_mp4', False)
+    source = data.get('source') or None
     session_id = data.get('session_id')
     
     if not url:
@@ -454,11 +464,12 @@ def start_download():
                 'url': url,
                 'filename': output_filename,
                 'convert_to_mp4': convert_to_mp4,
+                'source': source,
                 'start_time': datetime.now()
             }
             
             with WebDownloader(session_id, headless=True) as downloader:
-                success = downloader.download_video(url, output_filename, convert_to_mp4)
+                success = downloader.download_video(url, output_filename, convert_to_mp4, source)
                 
                 # Add to history
                 actual_filename = output_filename
@@ -482,9 +493,14 @@ def start_download():
                     
                     # Clean up filename (remove special characters)
                     import re
-                    base_name = re.sub(r'[^\w\-_.]', '_', base_name)
+                    base_name = re.sub(r'[^\\w\-_.]', '_', base_name)
                     
-                    actual_filename = f"{base_name}.{'mp4' if convert_to_mp4 else 'm3u8'}"
+                    # Decide extension – if convert_to_mp4 OR preferred source appears to be mp4, save as mp4
+                    if convert_to_mp4 or (source and source.upper() in ['TAP', 'MIX']):
+                        ext = 'mp4'
+                    else:
+                        ext = 'm3u8'
+                    actual_filename = f"{base_name}.{ext}"
                 
                 add_to_history(url, os.path.basename(actual_filename) if actual_filename else None, success, convert_to_mp4)
                 

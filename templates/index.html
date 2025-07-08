@@ -590,11 +590,19 @@
                     </div>
                     
                     <div class="form-group">
-                        <label class="form-label" for="filename">Custom Filename (Optional)</label>
-                        <input type="text" 
-                               id="filename" 
-                               class="form-input" 
-                               placeholder="my-video.m3u8">
+                        <label class="form-label" for="filename">Custom Filename (optional)</label>
+                        <input type="text" id="filename" class="form-input" placeholder="matrix_s01e01.mp4">
+                    </div>
+                    
+                    <!-- Preferred source selection -->
+                    <div class="form-group">
+                        <label class="form-label" for="sourceSelect">Preferred Source</label>
+                        <select id="sourceSelect" class="form-input">
+                            <option value="">Auto (first available)</option>
+                            <option value="MON">MON (Filemoon – m3u8)</option>
+                            <option value="TAP">TAP (Streamtape – mp4)</option>
+                            <option value="MIX">MIX (Mixdrop – mp4)</option>
+                        </select>
                     </div>
                     
                     <div class="checkbox-group">
@@ -781,6 +789,7 @@
                 const url = this.urlInput.value.trim();
                 const filename = this.filenameInput.value.trim();
                 const convertToMp4 = this.convertCheckbox.checked;
+                const source = document.getElementById('sourceSelect').value;
                 
                 if (!url) {
                     alert('Please enter a video URL');
@@ -794,7 +803,7 @@
                 
                 this.isDownloading = true;
                 this.updateDownloadButton();
-                this.showModal(url, filename, convertToMp4);
+                this.showModal(url, filename, convertToMp4, source);
                 
                 try {
                     const response = await fetch('/api/download', {
@@ -806,6 +815,7 @@
                             url: url,
                             filename: filename,
                             convert_to_mp4: convertToMp4,
+                            source: source,
                             session_id: this.sessionId
                         })
                     });
@@ -825,15 +835,15 @@
                 }
             }
             
-            showModal(url, filename, convertToMp4) {
+            showModal(url, filename, convertToMp4, source) {
                 const title = filename || this.extractVideoTitle(url);
                 document.getElementById('modalTitle').textContent = title;
                 this.modal.classList.add('active');
                 this.resetProgress();
-                this.setupVideoPreview(title, convertToMp4);
+                this.setupVideoPreview(title, convertToMp4, source);
             }
             
-            setupVideoPreview(filename, convertToMp4) {
+            setupVideoPreview(filename, convertToMp4, source) {
                 const videoPreview = document.getElementById('videoPreview');
                 const downloadM3u8Btn = document.getElementById('downloadM3u8Btn');
                 const downloadMp4Btn = document.getElementById('downloadMp4Btn');

@@ -135,58 +135,118 @@ class KukajDownloader:
             print("💡 Try running: playwright install firefox")
             raise
     
-    def extract_m3u8_url(self, url):
-        """Extract .m3u8 URL from the webpage using Playwright"""
+    # ------------------------------------------------------------------
+    # MEDIA URL EXTRACTION (M3U8 + MP4) --------------------------------
+    # ------------------------------------------------------------------
+
+    def extract_media_urls(self, url, source: str | None = None):
+        """Extract media URLs (.m3u8 or .mp4) from the Kukaj page.
+
+        Args:
+            url (str): Original Kukaj video URL (film or serie page)
+            source (str|None): Optional preferred source shortcut e.g. "MON", "TAP", "MIX".
+                               If provided, the corresponding button is clicked after page load
+                               to force the desired host.
+
+        Returns:
+            list[str]: list of unique media URLs discovered on the network
+        """
+
         print(f"🔍 Loading page: {url}")
-        
+
         if not self.page:
             print("❌ Page not initialized")
             return []
-            
-        m3u8_urls = []
-        
+
+        found_urls: list[str] = []
+
         try:
-            # Monitor context-wide (top page + iframes) for *.m3u8 requests.
-            print("🔄 Setting up context-wide m3u8 sniffing …")
+            # -----------------------------------------------------------
+            # Network sniffers – watch every request AND response in page
+            # -----------------------------------------------------------
+            print("🔄 Setting up network sniffers …")
             ctx = self.page.context
 
             def _sniff(route_or_resp):
-                u = route_or_resp.url
-                if '.m3u8' in u and u not in m3u8_urls:
-                    m3u8_urls.append(u)
-                    print(f"🎯 Found m3u8 URL: {u}")
+                u = route_or_resp.url.lower()
+                if (".m3u8" in u or ".mp4" in u) and (u not in found_urls):
+                    found_urls.append(route_or_resp.url)
+                    print(f"🎯 Found media URL: {route_or_resp.url}")
 
             ctx.on('request', _sniff)
             ctx.on('response', _sniff)
 
-            print(f"🌐 GOTO {url}")
+            # -----------------------------------------------------------
+            # Navigate to main page
+            # -----------------------------------------------------------
+            print(f"🌐 GOTO  {url}")
             response = self.page.goto(url, wait_until='domcontentloaded', timeout=60000)
             print(f"📍 Page status: {response.status if response else 'unknown'}")
-            
+
             if response and response.status >= 400:
                 print(f"⚠️ Page returned status {response.status}")
-            
-            print("✅ Page loaded successfully")
-            
-            # Passive wait – no clicking needed, rely on network listeners
-            print(f"⌛ Passive wait {self.wait_sec}s for HLS requests …")
+
+            # Optionally click desired source button (MON/TAP/MIX …)
+            if source:
+                try:
+                    # Ensure source menu is present
+                    self.page.wait_for_selector("div.subplayermenu", timeout=5000)
+
+                    # Playwright best-practice: use :has-text() or get_by_text for reliability
+                    print(f"➡️  Activating source button: {source.upper()}")
+                    btn_locator = self.page.locator("div.subplayermenu").get_by_text(source.upper(), exact=True)
+                    awaitable = None
+                    try:
+                        # Prefer clicking the <a> element for proper ajax handling
+                        if btn_locator.count() > 0:
+                            awaitable = btn_locator.first.click(timeout=5000)
+                        else:
+                            # Fallback – click by text anywhere
+                            awaitable = self.page.get_by_text(source.upper(), exact=True).first.click(timeout=5000)
+                    except Exception as e:
+                        print(f"⚠️  Direct click failed: {e}")
+                        # final fallback – click underlying button via JS
+                        self.page.evaluate("el => el.click()", btn_locator.first)
+
+                    # give site some time after activating new source – wait for network idle
+                    try:
+                        self.page.wait_for_load_state('networkidle', timeout=10000)
+                    except Exception:
+                        # ignore timeout – we'll rely on passive wait below
+                        pass
+                    # extra passive wait for any iframe traffic
+                    self.page.wait_for_timeout(4000)
+                except Exception as click_err:
+                    print(f"⚠️  Unable to activate source '{source}': {click_err}")
+
+            # Passive wait – let player/iframe emit network traffic
+            print(f"⌛ Passive wait {self.wait_sec}s for media requests …")
             self.page.wait_for_timeout(self.wait_sec * 1000)
-            
-            # Remove duplicates
-            m3u8_urls = list(set(m3u8_urls))
-            
-            if m3u8_urls:
-                print(f"🎉 Found {len(m3u8_urls)} m3u8 URL(s)")
-                for i, found_url in enumerate(m3u8_urls, 1):
-                    print(f"   {i}. {found_url}")
+
+            # Deduplicate
+            found_urls = list(dict.fromkeys(found_urls))
+
+            if found_urls:
+                print(f"🎉 Found {len(found_urls)} media URL(s)")
+                for i, fu in enumerate(found_urls, 1):
+                    print(f"   {i}. {fu}")
             else:
-                print("❌ No m3u8 URLs found")
-                
+                print("❌ No media URLs found")
+
         except Exception as e:
-            print(f"❌ Error extracting m3u8 URL: {e}")
-        
-        return m3u8_urls
+            print(f"❌ Error extracting media URLs: {e}")
+
+        return found_urls
+
+    # Backwards compatibility -------------------------------------------------
+    def extract_m3u8_url(self, url, source: str | None = None):
+        """Alias to :py:meth:`extract_media_urls` for legacy calls."""
+        return self.extract_media_urls(url, source)
     
+    # ------------------------------------------------------------------
+    # DOWNLOAD HELPERS (MP4 & M3U8)
+    # ------------------------------------------------------------------
+
     def download_with_ffmpeg(self, m3u8_url, output_filename):
         """Download m3u8 using FFmpeg"""
         try:
@@ -277,7 +337,56 @@ class KukajDownloader:
         print("🔄 FFmpeg failed, trying Python fallback...")
         return self.download_with_python(m3u8_url, output_filename)
     
-    def download_video(self, url, output_filename=None, convert_to_mp4=False):
+    # --------- MP4 helpers ---------------------------------------------------
+
+    def download_mp4_python(self, mp4_url, output_filename):
+        """Simple Python streaming download for MP4 files."""
+        try:
+            import requests
+            print(f"🐍 Downloading MP4 via Python: {mp4_url}")
+            with requests.get(mp4_url, stream=True, timeout=30) as r:
+                r.raise_for_status()
+                with open(output_filename, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+            print(f"✅ MP4 download successful: {output_filename}")
+            return True
+        except Exception as e:
+            print(f"❌ MP4 Python download error: {e}")
+            return False
+
+    def download_mp4_file(self, mp4_url, output_filename):
+        """Download MP4 file – try ffmpeg copy first then fallback to Python."""
+        try:
+            print(f"📥 Downloading MP4 with FFmpeg: {mp4_url}")
+            cmd = [
+                'ffmpeg',
+                '-i', mp4_url,
+                '-c', 'copy',
+                '-y',
+                output_filename
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"✅ FFmpeg MP4 download successful: {output_filename}")
+                return True
+            else:
+                print(f"⚠️  FFmpeg MP4 failed: {result.stderr.strip()}")
+                print("🔄 Falling back to Python stream download …")
+                return self.download_mp4_python(mp4_url, output_filename)
+        except FileNotFoundError:
+            print("⚠️  FFmpeg not found – using Python stream download …")
+            return self.download_mp4_python(mp4_url, output_filename)
+        except Exception as e:
+            print(f"❌ MP4 download error: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # PUBLIC ENTRY ------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def download_video(self, url, output_filename: str | None = None, convert_to_mp4: bool = False, source: str | None = None):
         """Download video from kukaj.fi URL"""
         print(f"🎬 Starting download from: {url}")
         
@@ -287,20 +396,29 @@ class KukajDownloader:
             print(f"🔄 Normalized URL: {normalized_url}")
             url = normalized_url
         
-        # Extract m3u8 URLs
-        m3u8_urls = self.extract_m3u8_url(url)
-        
-        if not m3u8_urls:
+        # Extract media URLs (.m3u8 or .mp4)
+        media_urls = self.extract_media_urls(url, source)
+
+        if not media_urls:
             print("❌ No video URLs found")
             return False
-        
-        # Use the first m3u8 URL found
-        m3u8_url = m3u8_urls[0]
-        print(f"📹 Using video URL: {m3u8_url}")
+
+        # Prioritise according to extension / preference
+        preferred_order = [
+            lambda u: u.lower().endswith('.m3u8'),  # HLS first
+            lambda u: '.m3u8' in u.lower(),
+            lambda u: u.lower().endswith('.mp4'),
+            lambda u: '.mp4' in u.lower(),
+        ]
+
+        media_urls.sort(key=lambda u: next((i for i, f in enumerate(preferred_order) if f(u)), 999))
+
+        media_url = media_urls[0]
+        print(f"📹 Using media URL: {media_url}")
         
         # Generate output filename if not provided
         if not output_filename:
-            # Extract filename from URL
+            # Extract filename from original page URL
             parsed_url = urlparse(url)
             path_parts = parsed_url.path.strip('/').split('/')
             
@@ -313,51 +431,27 @@ class KukajDownloader:
             else:
                 filename = path_parts[-1] if path_parts else "video"
             
-            # Clean filename
-            filename = re.sub(r'[^\w\-_\.]', '_', filename)
-            output_filename = f"{filename}.m3u8"
+            # Decide extension based on media_url
+            ext = '.mp4' if '.mp4' in media_url.lower() else '.m3u8'
+            output_filename = f"{filename}{ext}"
         
-        # Ensure we're saving to the downloads directory
+        # Ensure downloads directory exists and path is correct
         downloads_dir = os.path.join(os.getcwd(), 'downloads')
         os.makedirs(downloads_dir, exist_ok=True)
-        
-        # Update output filename to include downloads directory
         if not output_filename.startswith(downloads_dir):
             output_filename = os.path.join(downloads_dir, os.path.basename(output_filename))
         
         print(f"💾 Output filename: {output_filename}")
         
-        # Download the video
-        success = self.download_m3u8_file(m3u8_url, output_filename)
+        # Download according to extension
+        if '.m3u8' in media_url.lower():
+            success = self.download_m3u8_file(media_url, output_filename)
+        else:
+            # For direct MP4 we ignore convert_to_mp4 flag (already mp4)
+            success = self.download_mp4_file(media_url, output_filename)
         
         if success:
             print(f"✅ Download completed: {output_filename}")
-            
-            # Convert to MP4 if requested
-            if convert_to_mp4:
-                mp4_filename = output_filename.replace('.m3u8', '.mp4')
-                print(f"🔄 Converting to MP4: {mp4_filename}")
-                
-                cmd = [
-                    'ffmpeg',
-                    '-i', output_filename,
-                    '-c', 'copy',
-                    '-y',
-                    mp4_filename
-                ]
-                
-                try:
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        print(f"✅ MP4 conversion successful: {mp4_filename}")
-                        return mp4_filename
-                    else:
-                        print(f"⚠️ MP4 conversion failed: {result.stderr}")
-                        return output_filename
-                except Exception as e:
-                    print(f"⚠️ MP4 conversion error: {e}")
-                    return output_filename
-            
             return output_filename
         else:
             print("❌ Download failed")
