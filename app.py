@@ -66,7 +66,7 @@ def save_history():
     except Exception as e:
         print(f"⚠️ Error saving history: {e}")
 
-def add_to_history(url, filename, success=True, convert_to_mp4=False):
+def add_to_history(url, filename, success=True, convert_to_mp4=False, source=None):
     """Add download to history"""
     global download_history
     # Extract movie/series name from URL
@@ -98,6 +98,7 @@ def add_to_history(url, filename, success=True, convert_to_mp4=False):
         'date': datetime.now().isoformat(),
         'success': success,
         'convert_to_mp4': convert_to_mp4,
+        'source': source,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
@@ -147,6 +148,28 @@ class WebDownloader(KukajDownloader):
             self.emit_progress("🔍 Extracting video URLs...", "info")
             media_urls = self.extract_media_urls(url, source)
 
+            if not media_urls and source and source.upper() == 'TAP':
+                # Fallback to MON (Filemoon) with conversion
+                self.emit_progress("⚠️ TAP not available, falling back to MON (m3u8 → mp4)...", "warning")
+                media_urls = self.extract_media_urls(url, 'MON')
+                # Force convert_to_mp4 for fallback
+                convert_to_mp4 = True
+                if not media_urls:
+                    self.emit_progress("❌ No video URLs found on MON fallback", "error")
+                    return False
+                # Ensure we have an output filename with .mp4 extension
+                if not output_filename:
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(url)
+                    path_parts = parsed_url.path.strip('/').split('/')
+                    if len(path_parts) >= 2:
+                        base_name = f"{path_parts[-2]}_{path_parts[-1]}"
+                    else:
+                        base_name = path_parts[-1] if path_parts else 'video'
+                    import re
+                    base_name = re.sub(r'[^\w\-_.]', '_', base_name)
+                    output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}.mp4")
+
             if not media_urls:
                 self.emit_progress("❌ No video URLs found", "error")
                 return False
@@ -163,49 +186,47 @@ class WebDownloader(KukajDownloader):
             media_urls.sort(key=lambda u: next((i for i, f in enumerate(preferred_order) if f(u)), 999))
             media_url = media_urls[0]
             
-            # Generate output filename if not provided
-            if not output_filename:
-                from urllib.parse import urlparse
-                parsed_url = urlparse(url)
-                path_parts = parsed_url.path.strip('/').split('/')
-                
-                if len(path_parts) >= 1 and path_parts[-1]:
-                    if len(path_parts) >= 2 and path_parts[-2] not in ['film', 'serial']:
-                        base_name = f"{path_parts[-2]}_{path_parts[-1]}"
-                    else:
-                        base_name = path_parts[-1]
+            # Streamtape (TAP) – prefer the generic get_video link over the raw .mp4 (to avoid CORS / Referer issues)
+            if source and source.upper() == 'TAP':
+                # 1️⃣ prefer the generic get_video link (works reliably in browsers)
+                get_link = next((u for u in media_urls if 'streamtape.com/get_video' in u), None)
+                if get_link:
+                    media_url = get_link
                 else:
-                    base_name = "downloaded_video"
-
-                import re
-                base_name = re.sub(r'[^\w\-_.]', '_', base_name)
-
-                # Decide extension – if convert_to_mp4 OR preferred source appears to be mp4, save as mp4
-                if convert_to_mp4 or (source and source.upper() in ['TAP', 'MIX']):
-                    ext = 'mp4'
-                else:
-                    ext = 'm3u8'
-                output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}{ext}")
+                    # 2️⃣ fallback to raw .mp4 if we have nothing else
+                    direct_mp4 = next((u for u in media_urls if u.lower().endswith('.mp4')), None)
+                    if direct_mp4:
+                        media_url = direct_mp4
             
-            # Download
-            if '.m3u8' in media_url.lower():
-                if convert_to_mp4:
-                    self.emit_progress("🎬 Converting to MP4...", "info")
-                    success = self._download_with_progress_mp4(media_url, output_filename)
-                else:
-                    self.emit_progress("📁 Downloading .m3u8 file...", "info")
-                    success = self._download_with_progress_m3u8(media_url, output_filename)
-            else:
-                # Direct MP4
-                self.emit_progress("📥 Downloading MP4...", "info")
+            # ------------------------------------------------------------
+            # Decide whether to download server-side or just send link
+            # ------------------------------------------------------------
+            if convert_to_mp4:
+                # Server-side download/conversion (used for MON fallback)
+                self.emit_progress("📥 Downloading + converting to MP4...", "info")
                 success = self._download_with_progress_mp4(media_url, output_filename)
-            
-            if success:
-                self.emit_progress(f"🎉 Download completed: {output_filename}", "success")
-                return True
+                if success:
+                    self.emit_progress(f"🎉 Download completed: {output_filename}", "success")
+                    # Notify front-end with link to the newly stored mp4 so other devices can grab it
+                    file_link = f"/api/download-file/{os.path.basename(output_filename)}"
+                    socketio.emit('media_url', {
+                        'url': file_link,
+                        'type': 'mp4'
+                    }, room=self.session_id)
+                else:
+                    self.emit_progress("❌ Download failed", "error")
+                return success
             else:
-                self.emit_progress("❌ Download failed", "error")
-                return False
+                # LINK-ONLY MODE – send URL to front-end
+                lower_url = media_url.lower()
+                file_type = 'mp4' if ('.mp4' in lower_url or 'streamtape.com' in lower_url or 'tapecontent' in lower_url) else 'm3u8'
+                socketio.emit('media_url', {
+                    'url': media_url,
+                    'type': file_type
+                }, room=self.session_id)
+
+                self.emit_progress("🔗 Download link ready", "success")
+                return True
                 
         except Exception as e:
             self.emit_progress(f"❌ Error: {str(e)}", "error")
@@ -388,6 +409,45 @@ class WebDownloader(KukajDownloader):
             self.emit_progress(f"❌ .m3u8 download error: {str(e)}", "error")
             return False
 
+    def _download_direct_mp4(self, mp4_url, output_filename):
+        """Stream an MP4 file with simple percentage progress updates (no FFmpeg)."""
+        try:
+            import requests, math, os
+            from urllib.parse import urlparse
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+                "Accept": "*/*",
+                "Referer": "https://streamtape.com/" if "streamtape" in mp4_url or "tapecontent" in mp4_url else urlparse(mp4_url).scheme + "://" + urlparse(mp4_url).hostname,
+            }
+
+            self.emit_progress("📥 Downloading MP4... (0%)", "info")
+
+            with requests.get(mp4_url, stream=True, timeout=60, headers=headers) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("content-length", 0))
+                downloaded = 0
+                last_pct = -1
+
+                # Ensure output directory exists
+                os.makedirs(os.path.dirname(output_filename), exist_ok=True)
+
+                with open(output_filename, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1024 * 1024):  # 1 MB
+                        if chunk:
+                            f.write(chunk)
+                            if total:
+                                downloaded += len(chunk)
+                                pct = int(downloaded / total * 100)
+                                if pct >= last_pct + 5:
+                                    self.emit_progress(f"📥 Downloading MP4... ({pct}%)", "info")
+                                    last_pct = pct
+
+            self.emit_progress("📥 Downloading MP4... (100%)", "info")
+            return True
+        except Exception as e:
+            self.emit_progress(f"❌ MP4 download error: {str(e)}", "error")
+            return False
+
     def download_with_python(self, m3u8_url, output_filename):
         """Download and convert using Python libraries (fallback method)"""
         try:
@@ -496,13 +556,13 @@ def start_download():
                     base_name = re.sub(r'[^\\w\-_.]', '_', base_name)
                     
                     # Decide extension – if convert_to_mp4 OR preferred source appears to be mp4, save as mp4
-                    if convert_to_mp4 or (source and source.upper() in ['TAP', 'MIX']):
+                    if convert_to_mp4 or (source and source.upper() in ['TAP']):
                         ext = 'mp4'
                     else:
                         ext = 'm3u8'
                     actual_filename = f"{base_name}.{ext}"
                 
-                add_to_history(url, os.path.basename(actual_filename) if actual_filename else None, success, convert_to_mp4)
+                add_to_history(url, os.path.basename(actual_filename) if actual_filename else None, success, convert_to_mp4, source)
                 
                 # Clean up
                 if session_id in active_downloads:
@@ -511,11 +571,18 @@ def start_download():
                 # Emit to specific session and also broadcast to all clients
                 # Send just the filename, not the full path
                 filename_only = os.path.basename(actual_filename) if actual_filename else None
-                socketio.emit('download_complete', {
-                    'success': success,
-                    'filename': filename_only,
-                    'original_filename': output_filename
-                }, room=session_id)
+
+                # Emit 'download_complete' only if server actually created a file
+                file_created = False
+                if filename_only:
+                    file_created = os.path.exists(os.path.join(DOWNLOADS_DIR, filename_only))
+
+                if file_created:
+                    socketio.emit('download_complete', {
+                        'success': success,
+                        'filename': filename_only,
+                        'original_filename': output_filename
+                    }, room=session_id)
                 
                 # Also broadcast file list update to all clients
                 socketio.emit('files_updated', {

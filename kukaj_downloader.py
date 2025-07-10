@@ -121,6 +121,9 @@ class KukajDownloader:
                 }
             )
             
+            # Store context for later (e.g., cookie extraction)
+            self.context = context
+
             # Create page
             self.page = context.new_page()
             
@@ -197,16 +200,59 @@ class KukajDownloader:
                     btn_locator = self.page.locator("div.subplayermenu").get_by_text(source.upper(), exact=True)
                     awaitable = None
                     try:
-                        # Prefer clicking the <a> element for proper ajax handling
-                        if btn_locator.count() > 0:
-                            awaitable = btn_locator.first.click(timeout=5000)
+                        if btn_locator.count() == 0:
+                            # Fallback – search anywhere on the page
+                            btn_locator = self.page.get_by_text(source.upper(), exact=True)
+
+                        if btn_locator.count() == 0:
+                            raise ValueError("Source button not found")
+
+                        # Check if it's an <a href="/something"> link
+                        href = btn_locator.first.get_attribute("href")
+
+                        if href and href not in ("#", "", "javascript:void(0)"):
+                            from urllib.parse import urljoin
+                            next_url = urljoin(url, href)
+                            print(f"↪️  Navigating to source URL: {next_url}")
+                            self.page.goto(next_url, wait_until='domcontentloaded', timeout=30000)
+
+                            # If destination is a Streamtape page, grab video source instantly
+                            if any(x in self.page.url for x in ["streamtape.com", "tapecontent.net", "streamta.pe"]):
+                                try:
+                                    self.page.wait_for_selector("video", timeout=5000)
+                                    direct_src = self.page.evaluate("() => document.querySelector('video') && document.querySelector('video').src")
+                                    if direct_src and direct_src.startswith('http') and direct_src not in found_urls:
+                                        found_urls.append(direct_src)
+                                        print(f"🎯 Found media URL from direct Streamtape page: {direct_src}")
+                                except Exception as st_err:
+                                    print(f"⚠️  Streamtape direct extraction failed: {st_err}")
                         else:
-                            # Fallback – click by text anywhere
-                            awaitable = self.page.get_by_text(source.upper(), exact=True).first.click(timeout=5000)
+                            # Serial pages sometimes place source links as plain anchors outside subplayermenu
+                            # Quick path: look for any <a> containing the source text and an href ending with a digit
+                            if source.upper() == 'TAP':
+                                try:
+                                    generic_anchor = self.page.locator(f"a:has-text('{source.upper()}')").first
+                                    if generic_anchor.count() > 0:
+                                        href_raw = generic_anchor.get_attribute('href')
+                                        if href_raw and href_raw not in ("#", "javascript:void(0)"):
+                                            from urllib.parse import urljoin
+                                            abs_href = urljoin(url, href_raw)
+                                            if abs_href != self.page.url:
+                                                print(f"↪️  Direct anchor navigation to: {abs_href}")
+                                                self.page.goto(abs_href, wait_until='domcontentloaded', timeout=30000)
+                                                # allow embedded player to load
+                                                self.page.wait_for_timeout(4000)
+                                except Exception:
+                                    pass
+                            # Regular in-page AJAX style: just click
+                            btn_locator.first.click(timeout=5000)
                     except Exception as e:
-                        print(f"⚠️  Direct click failed: {e}")
-                        # final fallback – click underlying button via JS
-                        self.page.evaluate("el => el.click()", btn_locator.first)
+                        print(f"⚠️  Activating source via click/navigation failed: {e}")
+                        # final fallback – trigger click via JS if we still have element
+                        try:
+                            self.page.evaluate("el => el.click()", btn_locator.first)
+                        except Exception:
+                            pass
 
                     # give site some time after activating new source – wait for network idle
                     try:
@@ -216,12 +262,25 @@ class KukajDownloader:
                         pass
                     # extra passive wait for any iframe traffic
                     self.page.wait_for_timeout(4000)
+                    # Immediate frame scan for Streamtape
+                    for frm in self.page.frames:
+                        try:
+                            if 'streamtape' in frm.url or 'streamta.pe' in frm.url:
+                                candidate = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
+                                if candidate and candidate.startswith('http') and candidate not in found_urls:
+                                    found_urls.append(candidate)
+                                    print(f"🎯 Found media URL via immediate Streamtape scan: {candidate}")
+                        except Exception:
+                            pass
                 except Exception as click_err:
                     print(f"⚠️  Unable to activate source '{source}': {click_err}")
 
-            # Passive wait – let player/iframe emit network traffic
-            print(f"⌛ Passive wait {self.wait_sec}s for media requests …")
-            self.page.wait_for_timeout(self.wait_sec * 1000)
+            # Passive wait – only if we *still* have no URL
+            if not found_urls:
+                print(f"⌛ Passive wait {self.wait_sec}s for media requests …")
+                self.page.wait_for_timeout(self.wait_sec * 1000)
+            else:
+                print("⚡ Skipping passive wait – URL already captured")
 
             # Deduplicate
             found_urls = list(dict.fromkeys(found_urls))
@@ -340,16 +399,61 @@ class KukajDownloader:
     # --------- MP4 helpers ---------------------------------------------------
 
     def download_mp4_python(self, mp4_url, output_filename):
-        """Simple Python streaming download for MP4 files."""
+        """Stream an MP4 file with requests, adding typical browser headers and any cookies captured by Playwright."""
         try:
             import requests
+            from urllib.parse import urlparse
+
             print(f"🐍 Downloading MP4 via Python: {mp4_url}")
-            with requests.get(mp4_url, stream=True, timeout=30) as r:
+
+            # --------------------------------------------------
+            # Build headers – many hosts (e.g. Streamtape) block
+            # requests that lack a Referer or proper User-Agent.
+            # --------------------------------------------------
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+                "Accept": "*/*",
+            }
+
+            if any(h in mp4_url for h in ["streamtape", "tapecontent"]):
+                # Streamtape requires a valid referer header
+                headers["Referer"] = "https://streamtape.com/"
+
+            # Attach cookies from the browsing session if available
+            try:
+                if self.context:
+                    host = urlparse(mp4_url).hostname or ""
+                    cookie_parts = []
+                    for c in self.context.cookies():
+                        name = c.get('name')
+                        value = c.get('value')
+                        domain = c.get('domain')
+                        if name and value and domain and host.endswith(domain.lstrip('.')):
+                            cookie_parts.append(f"{name}={value}")
+                    cookie_str = "; ".join(cookie_parts)
+                    if cookie_str:
+                        headers["Cookie"] = cookie_str
+            except Exception:
+                pass  # Fallback silently if cookie extraction fails
+
+            with requests.get(mp4_url, stream=True, timeout=60, headers=headers) as r:
                 r.raise_for_status()
-                with open(output_filename, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
+
+                total = int(r.headers.get("content-length", 0))
+                downloaded = 0
+                last_pct = -1
+
+                with open(output_filename, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1 MB chunks
                         if chunk:
                             f.write(chunk)
+                            if total:
+                                downloaded += len(chunk)
+                                pct = int(downloaded / total * 100)
+                                if pct >= last_pct + 10:
+                                    print(f"📥 ... {pct}%")
+                                    last_pct = pct
+
             print(f"✅ MP4 download successful: {output_filename}")
             return True
         except Exception as e:
@@ -357,9 +461,15 @@ class KukajDownloader:
             return False
 
     def download_mp4_file(self, mp4_url, output_filename):
-        """Download MP4 file – try ffmpeg copy first then fallback to Python."""
+        """Download MP4 file – try fast Python streaming first, then fall back to FFmpeg if necessary."""
+
+        # 1️⃣ Python streaming (most hosts, including Streamtape, work fine with correct headers)
+        if self.download_mp4_python(mp4_url, output_filename):
+            return True
+
+        # 2️⃣ Fallback – attempt FFmpeg copy
         try:
-            print(f"📥 Downloading MP4 with FFmpeg: {mp4_url}")
+            print(f"📥 Retrying MP4 download with FFmpeg: {mp4_url}")
             cmd = [
                 'ffmpeg',
                 '-i', mp4_url,
@@ -372,12 +482,11 @@ class KukajDownloader:
                 print(f"✅ FFmpeg MP4 download successful: {output_filename}")
                 return True
             else:
-                print(f"⚠️  FFmpeg MP4 failed: {result.stderr.strip()}")
-                print("🔄 Falling back to Python stream download …")
-                return self.download_mp4_python(mp4_url, output_filename)
+                print(f"❌ FFmpeg MP4 failed: {result.stderr.strip()}")
+                return False
         except FileNotFoundError:
-            print("⚠️  FFmpeg not found – using Python stream download …")
-            return self.download_mp4_python(mp4_url, output_filename)
+            print("⚠️  FFmpeg not available and Python download already failed.")
+            return False
         except Exception as e:
             print(f"❌ MP4 download error: {e}")
             return False
@@ -517,7 +626,7 @@ DOWNLOAD_DIR  = Path("downloads")
 # ---------------------------------------------------------------------------
 
 
-async def main():
+async def demo_async():
     DOWNLOAD_DIR.mkdir(exist_ok=True)
 
     async with async_playwright() as p:
@@ -559,10 +668,11 @@ async def main():
         page.on("response", sniff)
 
         # all future iframes inherit the listeners
-        context.on("page", lambda new_page: (
-            new_page.on("request", sniff),
-            new_page.on("response", sniff),
-        ))
+        def _attach(new_page):
+            new_page.on("request", sniff)
+            new_page.on("response", sniff)
+
+        context.on("page", _attach)
 
         print(f"🌐  GOTO  {URL}")
         await page.goto(URL, wait_until="domcontentloaded", timeout=60_000)
@@ -584,6 +694,10 @@ async def main():
 
         await browser.close()
 
-
-if __name__ == "__main__":
-    asyncio.run(main()) 
+# ---------------------------------------------------------------------------
+# The async demonstration above is disabled by default to prevent interference
+# with the standard CLI entrypoint. Uncomment the following lines to try it
+# manually:
+#
+# if __name__ == "__main__":
+#     asyncio.run(demo_async()) 

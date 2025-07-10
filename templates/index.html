@@ -601,7 +601,6 @@
                             <option value="">Auto (first available)</option>
                             <option value="MON">MON (Filemoon – m3u8)</option>
                             <option value="TAP">TAP (Streamtape – mp4)</option>
-                            <option value="MIX">MIX (Mixdrop – mp4)</option>
                         </select>
                     </div>
                     
@@ -655,12 +654,12 @@
                 </div>
                 
                 <div class="download-actions" id="downloadActions">
-                    <button class="btn btn-primary btn-small" id="downloadM3u8Btn" style="display: none;">
+                    <a class="btn btn-primary btn-small" id="downloadM3u8Btn" href="#" target="_blank" style="display: none;">
                         <i class="fas fa-download"></i> Download m3u8
-                    </button>
-                    <button class="btn btn-primary btn-small" id="downloadMp4Btn" style="display: none;">
+                    </a>
+                    <a class="btn btn-primary btn-small" id="downloadMp4Btn" href="#" target="_blank" style="display: none;">
                         <i class="fas fa-download"></i> Download mp4
-                    </button>
+                    </a>
                 </div>
                 
                 <div class="progress-section">
@@ -773,6 +772,52 @@
                 
                 this.socket.on('files_updated', (data) => {
                     this.loadHistory();
+                });
+
+                // Show download link buttons when backend sends media_url
+                this.socket.on('media_url', (payload) => {
+                    const { url, type } = payload;
+                    const mp4Btn = document.getElementById('downloadMp4Btn');
+                    const m3u8Btn = document.getElementById('downloadM3u8Btn');
+
+                    if (type === 'mp4') {
+                        mp4Btn.href = url;
+                        mp4Btn.style.display = 'inline-flex';
+                        mp4Btn.innerHTML = '<i class="fas fa-download"></i> Download mp4';
+                        m3u8Btn.style.display = 'none';
+                    } else {
+                        m3u8Btn.href = url;
+                        m3u8Btn.style.display = 'inline-flex';
+                        m3u8Btn.innerHTML = '<i class="fas fa-download"></i> Download m3u8';
+                        mp4Btn.style.display = 'none';
+                    }
+                    // Ensure modal is open and progress resets
+                    this.progressFill.style.width = '0%';
+                    this.progressTitle.textContent = 'Link ready';
+                    this.progressText.textContent = url;
+
+                    // Reset main download button state
+                    this.isDownloading = false;
+                    this.updateDownloadButton();
+
+                    // Preview remote video link immediately
+                    const videoPreview = document.getElementById('videoPreview');
+                    if (type === 'mp4') {
+                        videoPreview.innerHTML = `<video controls style="width:100%;height:100%;border-radius:8px;"><source src="${url}" type="video/mp4">Your browser does not support the video tag.</video>`;
+                    } else {
+                        // M3U8 preview via hls.js
+                        const videoId = 'remotePreview';
+                        videoPreview.innerHTML = `<video id="${videoId}" controls style="width:100%;height:100%;border-radius:8px;"></video>`;
+                        if (Hls.isSupported()) {
+                            const hls = new Hls();
+                            hls.loadSource(url);
+                            hls.attachMedia(document.getElementById(videoId));
+                        } else if (document.getElementById(videoId).canPlayType('application/vnd.apple.mpegurl')) {
+                            document.getElementById(videoId).src = url;
+                        } else {
+                            videoPreview.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#fff;background:#1a1a1a;border-radius:8px;">Preview not supported</div>';
+                        }
+                    }
                 });
 
                 const clearBtn = document.getElementById('clearHistoryBtn');
@@ -1148,10 +1193,10 @@
                             </div>
                         </div>
                         <div class="history-actions">
-                            <button class="btn btn-secondary btn-small" onclick="app.redownloadVideo('${item.url}', false)">
+                            <button class="btn btn-secondary btn-small" onclick="app.redownloadVideo('${item.url}', 'MON')">
                                 <i class="fas fa-download"></i> m3u8
                             </button>
-                            <button class="btn btn-secondary btn-small" onclick="app.redownloadVideo('${item.url}', true)">
+                            <button class="btn btn-secondary btn-small" onclick="app.redownloadVideo('${item.url}', 'TAP')">
                                 <i class="fas fa-download"></i> mp4
                             </button>
                             <button class="btn btn-danger btn-icon" onclick="app.deleteHistoryItem('${item.url}')" title="Remove from history">
@@ -1162,17 +1207,17 @@
                 `).join('');
             }
             
-            async redownloadVideo(url, convertToMp4) {
+            async redownloadVideo(url, source) {
                 // Restart the download process with the original URL
                 this.urlInput.value = url;
-                this.convertCheckbox.checked = convertToMp4;
+                this.convertCheckbox.checked = false; // Reset convertToMp4
                 
                 // Trigger download
                 if (this.isDownloading) return;
                 
                 this.isDownloading = true;
                 this.updateDownloadButton();
-                this.showModal(url, '', convertToMp4);
+                this.showModal(url, '', false, source); // Pass source to showModal
                 
                 try {
                     const response = await fetch('/api/download', {
@@ -1183,7 +1228,8 @@
                         body: JSON.stringify({
                             url: url,
                             filename: '',
-                            convert_to_mp4: convertToMp4,
+                            convert_to_mp4: false, // Always false for redownload
+                            source: source,
                             session_id: this.sessionId
                         })
                     });

@@ -1,12 +1,32 @@
 [
   {
     "url": "https://film.kukaj.fi/matrix",
-    "filename": "______.mp4",
+    "filename": "______.m3u8",
     "display_name": "Matrix",
-    "date": "2025-07-08T21:51:51.865993",
-    "success": false,
+    "date": "2025-07-10T17:49:58.648971",
+    "success": true,
     "convert_to_mp4": false,
-    "timestamp": "2025-07-08 21:51:51"
+    "source": "MON",
+    "timestamp": "2025-07-10 17:49:58"
+  },
+  {
+    "url": "https://serial.kukaj.fi/stargate-sg-1/S02E06",
+    "filename": "________-__-________.mp4",
+    "display_name": "Stargate Sg 1   S02E06",
+    "date": "2025-07-10T17:49:05.942739",
+    "success": true,
+    "convert_to_mp4": false,
+    "source": "TAP",
+    "timestamp": "2025-07-10 17:49:05"
+  },
+  {
+    "url": "https://serial.kukaj.fi/hra-na-olihen/S01E02",
+    "filename": "___-__-_____________.mp4",
+    "display_name": "Hra Na Olihen   S01E02",
+    "date": "2025-07-10T14:23:02.320505",
+    "success": true,
+    "convert_to_mp4": false,
+    "timestamp": "2025-07-10 14:23:02"
   },
   {
     "url": "https://serial.kukaj.fi/hra-na-olihen/S01E04",
@@ -25,15 +45,6 @@
     "success": true,
     "convert_to_mp4": false,
     "timestamp": "2025-07-06 19:54:20"
-  },
-  {
-    "url": "https://serial.kukaj.fi/hra-na-olihen/S01E02",
-    "filename": "hra-na-olihen_S01E02.m3u8",
-    "display_name": "Hra Na Olihen   S01E02",
-    "date": "2025-07-06T19:49:51.843512",
-    "success": false,
-    "convert_to_mp4": false,
-    "timestamp": "2025-07-06 19:49:51"
   },
   {
     "url": "https://serial.kukaj.fi/hra-na-olihen/S01E01",
