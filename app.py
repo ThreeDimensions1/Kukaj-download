@@ -28,6 +28,11 @@ HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'downloa
 active_downloads = {}
 download_history = []
 
+# Global download lock to prevent multiple simultaneous downloads
+global_download_lock = threading.Lock()
+current_download_session = None
+download_start_time = None
+
 def setup_downloads_directory():
     """Create and clean the downloads directory"""
     if os.path.exists(DOWNLOADS_DIR):
@@ -122,85 +127,152 @@ class WebDownloader(KukajDownloader):
     
     def __init__(self, session_id, headless=True):
         self.session_id = session_id
-        super().__init__(headless)
+        self.error_count = 0
+        self.max_errors = 5
+        try:
+            super().__init__(headless)
+        except Exception as e:
+            self.emit_progress(f"❌ Failed to initialize browser: {str(e)}", "error")
+            raise
     
     def emit_progress(self, message, status="info"):
         """Emit progress updates to the web interface"""
-        socketio.emit('download_progress', {
-            'message': message,
-            'status': status,
-            'timestamp': datetime.now().strftime('%H:%M:%S')
-        }, room=self.session_id)
+        try:
+            # Emit to the specific session
+            socketio.emit('download_progress', {
+                'message': message,
+                'status': status,
+                'timestamp': datetime.now().strftime('%H:%M:%S')
+            }, room=self.session_id)
+            
+            # Also broadcast to all clients for mini panel sync
+            socketio.emit('download_progress_global', {
+                'message': message,
+                'status': status,
+                'session_id': self.session_id,
+                'timestamp': datetime.now().strftime('%H:%M:%S')
+            })
+            
+            # Track errors
+            if status == "error":
+                self.error_count += 1
+                if self.error_count >= self.max_errors:
+                    self.emit_progress("❌ Too many errors, stopping download", "error")
+                    raise Exception("Maximum error count reached")
+        except Exception as e:
+            print(f"❌ Failed to emit progress: {e}")
+    
+    def close(self):
+        """Override close with better error handling"""
+        try:
+            self.emit_progress("🧹 Cleaning up browser resources...", "info")
+            super().close()
+        except Exception as e:
+            print(f"❌ Error during cleanup: {e}")
+            # Force cleanup if needed
+            try:
+                import subprocess
+                import platform
+                if 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower():
+                    subprocess.run(['pkill', '-f', 'firefox'], stderr=subprocess.DEVNULL, timeout=5)
+            except:
+                pass
     
     def download_video(self, url, output_filename=None, convert_to_mp4=False, source=None):
         """Override to add progress updates"""
-        try:
-            self.emit_progress("🔄 Starting download process...", "info")
-            
-            # Normalize the URL
-            normalized_url, was_changed = normalize_kukaj_url(url)
-            if was_changed:
-                self.emit_progress(f"🔄 URL normalized from {url}", "info")
-                self.emit_progress(f"📍 Using: {normalized_url}", "success")
-                url = normalized_url
-            
-            # Extract media URLs (m3u8 or mp4)
-            self.emit_progress("🔍 Extracting video URLs...", "info")
-            media_urls = self.extract_media_urls(url, source)
+        max_retries = 2
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                if retry_count > 0:
+                    self.emit_progress(f"🔄 Retry attempt {retry_count}/{max_retries}...", "warning")
+                
+                self.emit_progress("🔄 Starting download process...", "info")
+                
+                # Normalize the URL
+                normalized_url, was_changed = normalize_kukaj_url(url)
+                if was_changed:
+                    self.emit_progress(f"🔄 URL normalized from {url}", "info")
+                    self.emit_progress(f"📍 Using: {normalized_url}", "success")
+                    url = normalized_url
+                
+                # Extract media URLs (m3u8 or mp4)
+                self.emit_progress("🔍 Extracting video URLs...", "info")
+                media_urls = self.extract_media_urls(url, source)
 
-            if not media_urls and source and source.upper() == 'TAP':
-                # Fallback to MON (Filemoon) with conversion
-                self.emit_progress("⚠️ TAP not available, falling back to MON (m3u8 → mp4)...", "warning")
-                media_urls = self.extract_media_urls(url, 'MON')
-                # Force convert_to_mp4 for fallback
-                convert_to_mp4 = True
                 if not media_urls:
-                    self.emit_progress("❌ No video URLs found on MON fallback", "error")
-                    return False
-                # Ensure we have an output filename with .mp4 extension
-                if not output_filename:
-                    from urllib.parse import urlparse
-                    parsed_url = urlparse(url)
-                    path_parts = parsed_url.path.strip('/').split('/')
-                    if len(path_parts) >= 2:
-                        base_name = f"{path_parts[-2]}_{path_parts[-1]}"
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        self.emit_progress(f"⚠️ No video URLs found, retrying... ({retry_count}/{max_retries})", "warning")
+                        time.sleep(3)  # Wait before retry
+                        continue
                     else:
-                        base_name = path_parts[-1] if path_parts else 'video'
-                    import re
-                    base_name = re.sub(r'[^\w\-_.]', '_', base_name)
-                    output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}.mp4")
+                        # Only attempt TAP fallback after ALL retries have failed
+                        if source and source.upper() == 'TAP':
+                            self.emit_progress("⚠️ TAP failed after all retries, attempting MON fallback (m3u8 → mp4)...", "warning")
+                            media_urls = self.extract_media_urls(url, 'MON')
+                            if media_urls:
+                                # Force convert_to_mp4 for fallback
+                                convert_to_mp4 = True
+                                # Ensure we have an output filename with .mp4 extension
+                                if not output_filename:
+                                    from urllib.parse import urlparse
+                                    parsed_url = urlparse(url)
+                                    path_parts = parsed_url.path.strip('/').split('/')
+                                    if len(path_parts) >= 2:
+                                        base_name = f"{path_parts[-2]}_{path_parts[-1]}"
+                                    else:
+                                        base_name = path_parts[-1] if path_parts else 'video'
+                                    import re
+                                    base_name = re.sub(r'[^\w\-_.]', '_', base_name)
+                                    output_filename = os.path.join(DOWNLOADS_DIR, f"{base_name}.mp4")
+                        
+                        if not media_urls:
+                            self.emit_progress("❌ No video URLs found after all retries and fallback attempts", "error")
+                            return False
 
-            if not media_urls:
-                self.emit_progress("❌ No video URLs found", "error")
-                return False
+                self.emit_progress(f"✅ Found {len(media_urls)} video URL(s)", "success")
 
-            self.emit_progress(f"✅ Found {len(media_urls)} video URL(s)", "success")
-
-            # Prefer .m3u8 over .mp4
-            preferred_order = [
-                lambda u: u.lower().endswith('.m3u8'),
-                lambda u: '.m3u8' in u.lower(),
-                lambda u: u.lower().endswith('.mp4'),
-                lambda u: '.mp4' in u.lower(),
-            ]
-            media_urls.sort(key=lambda u: next((i for i, f in enumerate(preferred_order) if f(u)), 999))
-            media_url = media_urls[0]
-            
-            # Streamtape (TAP) – prefer the generic get_video link over the raw .mp4 (to avoid CORS / Referer issues)
-            if source and source.upper() == 'TAP':
-                # 1️⃣ prefer the generic get_video link (works reliably in browsers)
-                get_link = next((u for u in media_urls if 'streamtape.com/get_video' in u), None)
-                if get_link:
-                    media_url = get_link
+                # Prefer .m3u8 over .mp4
+                preferred_order = [
+                    lambda u: u.lower().endswith('.m3u8'),
+                    lambda u: '.m3u8' in u.lower(),
+                    lambda u: u.lower().endswith('.mp4'),
+                    lambda u: '.mp4' in u.lower(),
+                ]
+                media_urls.sort(key=lambda u: next((i for i, f in enumerate(preferred_order) if f(u)), 999))
+                media_url = media_urls[0]
+                
+                # Streamtape (TAP) – prefer the generic get_video link over the raw .mp4 (to avoid CORS / Referer issues)
+                if source and source.upper() == 'TAP':
+                    # 1️⃣ prefer the generic get_video link (works reliably in browsers)
+                    get_link = next((u for u in media_urls if 'streamtape.com/get_video' in u), None)
+                    if get_link:
+                        media_url = get_link
+                    else:
+                        # 2️⃣ fallback to raw .mp4 if we have nothing else
+                        direct_mp4 = next((u for u in media_urls if u.lower().endswith('.mp4')), None)
+                        if direct_mp4:
+                            media_url = direct_mp4
+                
+                # Break out of retry loop if we got here successfully
+                break
+                
+            except Exception as e:
+                if retry_count < max_retries:
+                    retry_count += 1
+                    self.emit_progress(f"❌ Error: {str(e)}, retrying... ({retry_count}/{max_retries})", "warning")
+                    time.sleep(3)  # Wait before retry
+                    continue
                 else:
-                    # 2️⃣ fallback to raw .mp4 if we have nothing else
-                    direct_mp4 = next((u for u in media_urls if u.lower().endswith('.mp4')), None)
-                    if direct_mp4:
-                        media_url = direct_mp4
-            
-            # ------------------------------------------------------------
-            # Decide whether to download server-side or just send link
-            # ------------------------------------------------------------
+                    self.emit_progress(f"❌ Fatal error after all retries: {str(e)}", "error")
+                    return False
+        
+        # ------------------------------------------------------------
+        # Decide whether to download server-side or just send link
+        # ------------------------------------------------------------
+        try:
             if convert_to_mp4:
                 # Server-side download/conversion (used for MON fallback)
                 self.emit_progress("📥 Downloading + converting to MP4...", "info")
@@ -496,6 +568,8 @@ def index():
 @app.route('/api/download', methods=['POST'])
 def start_download():
     """Start a download process"""
+    global current_download_session, download_start_time
+    
     data = request.json
     url = data.get('url', '').strip()
     output_filename = data.get('filename', '').strip()
@@ -513,12 +587,38 @@ def start_download():
     if 'kukaj.' not in url:
         return jsonify({'error': 'Please provide a valid kukaj URL'}), 400
     
-    # Check if download is already in progress
-    if session_id in active_downloads:
-        return jsonify({'error': 'Download already in progress'}), 409
+    # Global download lock - only one download at a time across all devices
+    with global_download_lock:
+        if current_download_session is not None:
+            # Check if the existing download is still active (timeout after 10 minutes)
+            if download_start_time and (datetime.now() - download_start_time).total_seconds() < 600:
+                return jsonify({
+                    'error': 'Another download is already in progress. Please wait.',
+                    'active_session': current_download_session,
+                    'start_time': download_start_time.isoformat()
+                }), 409
+            else:
+                # Clean up stale download
+                current_download_session = None
+                download_start_time = None
+        
+        # Set this session as the active download
+        current_download_session = session_id
+        download_start_time = datetime.now()
+        
+        # Broadcast download start to all connected clients
+        socketio.emit('download_state_changed', {
+            'downloading': True,
+            'session_id': session_id,
+            'url': url,
+            'filename': output_filename,
+            'source': source,
+            'start_time': download_start_time.isoformat()
+        })
     
     # Start download in background thread
     def download_thread():
+        global current_download_session, download_start_time
         try:
             active_downloads[session_id] = {
                 'url': url,
@@ -578,11 +678,20 @@ def start_download():
                     file_created = os.path.exists(os.path.join(DOWNLOADS_DIR, filename_only))
 
                 if file_created:
+                    # Emit to specific session
                     socketio.emit('download_complete', {
                         'success': success,
                         'filename': filename_only,
                         'original_filename': output_filename
                     }, room=session_id)
+                    
+                    # Also broadcast to all clients for sync
+                    socketio.emit('download_complete_global', {
+                        'success': success,
+                        'filename': filename_only,
+                        'original_filename': output_filename,
+                        'session_id': session_id
+                    })
                 
                 # Also broadcast file list update to all clients
                 socketio.emit('files_updated', {
@@ -590,12 +699,33 @@ def start_download():
                 })
                 
         except Exception as e:
+            print(f"❌ Download thread error: {e}")
+            # Emit to specific session
             socketio.emit('download_error', {
                 'error': str(e)
             }, room=session_id)
             
+            # Also broadcast to all clients for sync
+            socketio.emit('download_error_global', {
+                'error': str(e),
+                'session_id': session_id
+            })
+            
             if session_id in active_downloads:
                 del active_downloads[session_id]
+        
+        finally:
+            # Always clean up global download lock
+            with global_download_lock:
+                if current_download_session == session_id:
+                    current_download_session = None
+                    download_start_time = None
+                    
+                    # Broadcast download end to all connected clients
+                    socketio.emit('download_state_changed', {
+                        'downloading': False,
+                        'session_id': session_id
+                    })
     
     threading.Thread(target=download_thread, daemon=True).start()
     
@@ -648,6 +778,42 @@ def download_file(filename):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/download-status')
+def get_download_status():
+    """Get current download status"""
+    global current_download_session, download_start_time
+    
+    with global_download_lock:
+        if current_download_session is not None:
+            # Check if download is still active
+            if download_start_time and (datetime.now() - download_start_time).total_seconds() < 600:
+                # Get additional info from active downloads
+                active_info = active_downloads.get(current_download_session, {})
+                
+                return jsonify({
+                    'downloading': True,
+                    'session_id': current_download_session,
+                    'url': active_info.get('url'),
+                    'filename': active_info.get('filename'),
+                    'source': active_info.get('source'),
+                    'start_time': download_start_time.isoformat(),
+                    'duration': (datetime.now() - download_start_time).total_seconds()
+                })
+            else:
+                # Clean up stale download
+                current_download_session = None
+                download_start_time = None
+        
+        return jsonify({
+            'downloading': False,
+            'session_id': None,
+            'url': None,
+            'filename': None,
+            'source': None,
+            'start_time': None,
+            'duration': 0
+        })
+
 @app.route('/api/history')
 def get_history():
     """Get download history"""
@@ -693,16 +859,124 @@ def handle_disconnect():
 
 @socketio.on('join_session')
 def handle_join_session(data):
-    """Handle joining a session"""
+    """Handle client joining a session room"""
     session_id = data.get('session_id')
     if session_id:
-        # Join the session room for targeted updates
         join_room(session_id)
-        print(f"Client {request.sid} joined session room: {session_id}")
+        print(f"Client {request.sid} joined session {session_id}")
+
+# Performance monitoring for ARM devices
+def get_system_info():
+    """Get system information for ARM devices"""
+    import platform
+    import psutil
+    import os
+    
+    info = {
+        'platform': platform.platform(),
+        'machine': platform.machine(),
+        'processor': platform.processor(),
+        'cpu_count': psutil.cpu_count(),
+        'cpu_percent': psutil.cpu_percent(interval=1),
+        'memory': psutil.virtual_memory()._asdict(),
+        'disk': psutil.disk_usage('/')._asdict(),
+        'load_avg': os.getloadavg() if hasattr(os, 'getloadavg') else None,
+        'is_arm': 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower()
+    }
+    
+    return info
+
+@app.route('/api/system-info')
+def get_system_info_endpoint():
+    """Get system information for monitoring"""
+    try:
+        info = get_system_info()
+        return jsonify(info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ARM-specific resource monitoring
+class ARMResourceMonitor:
+    def __init__(self):
+        self.is_arm = False
+        self.monitoring_enabled = False
+        try:
+            import platform
+            self.is_arm = 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower()
+            if self.is_arm:
+                import psutil
+                self.monitoring_enabled = True
+                print("🔧 ARM resource monitoring enabled")
+        except ImportError:
+            print("⚠️ psutil not available, resource monitoring disabled")
+    
+    def get_resource_usage(self):
+        """Get current resource usage"""
+        if not self.monitoring_enabled:
+            return None
+        
+        try:
+            import psutil
+            return {
+                'cpu_percent': psutil.cpu_percent(interval=0.1),
+                'memory_percent': psutil.virtual_memory().percent,
+                'memory_available': psutil.virtual_memory().available,
+                'disk_usage': psutil.disk_usage('/').percent,
+                'load_avg': psutil.getloadavg() if hasattr(psutil, 'getloadavg') else None
+            }
+        except Exception as e:
+            print(f"⚠️ Error getting resource usage: {e}")
+            return None
+    
+    def check_resource_limits(self):
+        """Check if resource usage is too high for ARM devices"""
+        if not self.monitoring_enabled:
+            return True
+        
+        try:
+            usage = self.get_resource_usage()
+            if not usage:
+                return True
+            
+            # ARM-specific thresholds
+            if usage['cpu_percent'] > 85:
+                print(f"⚠️ High CPU usage: {usage['cpu_percent']}%")
+                return False
+            
+            if usage['memory_percent'] > 90:
+                print(f"⚠️ High memory usage: {usage['memory_percent']}%")
+                return False
+            
+            return True
+        except Exception as e:
+            print(f"⚠️ Error checking resource limits: {e}")
+            return True
+
+# Global resource monitor
+resource_monitor = ARMResourceMonitor()
 
 if __name__ == '__main__':
-    print("🚀 Starting Kukaj Video Downloader Web Interface")
-    print("📍 Open your browser to: http://localhost:8080")
-    print("🎬 Ready to download videos!")
+    print("🚀 Starting Kukaj Video Downloader...")
     
-    socketio.run(app, debug=True, host='0.0.0.0', port=8080) 
+    # Print system information
+    try:
+        system_info = get_system_info()
+        print(f"📊 System: {system_info['platform']}")
+        print(f"🔧 Architecture: {system_info['machine']}")
+        print(f"💾 Memory: {system_info['memory']['total'] // (1024**3)} GB")
+        print(f"💻 CPU cores: {system_info['cpu_count']}")
+        if system_info['is_arm']:
+            print("🔧 ARM device detected - optimizations enabled")
+    except Exception as e:
+        print(f"⚠️ Could not get system info: {e}")
+    
+    # Check if we have enough resources
+    if resource_monitor.monitoring_enabled:
+        usage = resource_monitor.get_resource_usage()
+        if usage:
+            print(f"📊 Current CPU: {usage['cpu_percent']}%")
+            print(f"📊 Current Memory: {usage['memory_percent']}%")
+            if not resource_monitor.check_resource_limits():
+                print("⚠️ Warning: High resource usage detected")
+    
+    socketio.run(app, host='0.0.0.0', port=8080, debug=False, allow_unsafe_werkzeug=True) 

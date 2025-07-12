@@ -194,6 +194,121 @@
             cursor: not-allowed;
         }
 
+        /* Mini Status Panel - Redesigned */
+        .mini-status-panel {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(30, 30, 30, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            min-width: 180px;
+            max-width: 220px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            color: white;
+        }
+
+        .mini-status-panel.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(10px);
+        }
+
+        .mini-status-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            font-weight: 600;
+            color: white;
+            font-size: 0.9rem;
+        }
+
+        .mini-status-close {
+            background: none;
+            border: none;
+            color: rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 6px;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+
+        .mini-status-close:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .mini-status-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 0.85rem;
+        }
+
+        .mini-status-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .mini-status-icon {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .mini-status-icon.active {
+            background: #10b981;
+            animation: pulse 2s infinite;
+        }
+
+        .mini-status-icon.inactive {
+            background: #6b7280;
+        }
+
+        .mini-status-icon.downloading {
+            background: #3b82f6;
+            animation: pulse 1s infinite;
+        }
+
+        .mini-status-icon.error {
+            background: #ef4444;
+        }
+
+        .mini-status-panel .btn {
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 0.8rem;
+            border-radius: 8px;
+            margin-top: 8px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            transition: all 0.2s ease;
+        }
+
+        .mini-status-panel .btn:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
         /* History Section */
         .history-list {
             display: flex;
@@ -717,6 +832,13 @@
                 this.isDownloading = false;
                 this.downloadHistory = [];
                 this.hls = null; // For HLS.js player
+                this.globalDownloadActive = false;
+                this.activeDownloadSession = null;
+                this.activeDownloadUrl = null;
+                this.activeDownloadFilename = null;
+                this.downloadProgress = '';
+                this.downloadProgressPercent = 0;
+                this.miniPanelHideTimeout = null;
                 
                 this.form = document.getElementById('downloadForm');
                 this.urlInput = document.getElementById('videoUrl');
@@ -731,6 +853,8 @@
                 
                 this.setupEventListeners();
                 this.loadHistory();
+                this.checkDownloadStatus();
+                this.initializeMiniStatusPanel();
             }
             
             setupEventListeners() {
@@ -739,10 +863,34 @@
                 // Join session room when connected
                 this.socket.on('connect', () => {
                     this.socket.emit('join_session', { session_id: this.sessionId });
+                    this.updateConnectionStatus();
+                });
+                
+                this.socket.on('disconnect', () => {
+                    this.updateConnectionStatus();
                 });
                 
                 this.socket.on('download_progress', (data) => {
                     this.updateProgress(data.message, data.status);
+                });
+                
+                // Listen for global download progress for mini panel
+                this.socket.on('download_progress_global', (data) => {
+                    // Update mini panel progress if this is a remote download
+                    if (this.globalDownloadActive && data.session_id !== this.sessionId) {
+                        this.downloadProgress = data.message;
+                        // Extract percentage if available
+                        const percentMatch = data.message.match(/(\d+)%/);
+                        if (percentMatch) {
+                            this.downloadProgressPercent = parseInt(percentMatch[1]);
+                        }
+                        this.updateMiniStatusPanel();
+                        
+                        // Also sync the download modal if it's open
+                        if (this.modal && !this.modal.classList.contains('hidden')) {
+                            this.updateProgress(data.message, data.status);
+                        }
+                    }
                 });
                 
                 this.socket.on('download_complete', (data) => {
@@ -768,6 +916,47 @@
                     this.isDownloading = false;
                     this.updateDownloadButton();
                     this.updateProgress(`❌ Error: ${data.error}`, 'error');
+                });
+                
+                // Listen for global download completion for sync
+                this.socket.on('download_complete_global', (data) => {
+                    // Update mini panel for remote downloads
+                    if (data.session_id !== this.sessionId) {
+                        this.downloadProgress = data.success ? '✅ Download completed!' : '❌ Download failed';
+                        this.downloadProgressPercent = data.success ? 100 : 0;
+                        this.updateMiniStatusPanel();
+                        
+                        // Also sync the download modal if it's open
+                        if (this.modal && !this.modal.classList.contains('hidden')) {
+                            if (data.success) {
+                                this.updateProgress('✅ Download completed successfully!', 'success');
+                                this.progressFill.style.width = '100%';
+                                this.progressTitle.textContent = 'Progress 100%';
+                                
+                                // Show download link
+                                setTimeout(() => {
+                                    this.setupVideoPreviewFromFilename(data.filename);
+                                }, 1000);
+                            } else {
+                                this.updateProgress('❌ Download failed', 'error');
+                            }
+                        }
+                    }
+                });
+                
+                // Listen for global download errors for sync
+                this.socket.on('download_error_global', (data) => {
+                    // Update mini panel for remote downloads
+                    if (data.session_id !== this.sessionId) {
+                        this.downloadProgress = '❌ Download failed';
+                        this.downloadProgressPercent = 0;
+                        this.updateMiniStatusPanel();
+                        
+                        // Also sync the download modal if it's open
+                        if (this.modal && !this.modal.classList.contains('hidden')) {
+                            this.updateProgress(`❌ Error: ${data.error}`, 'error');
+                        }
+                    }
                 });
                 
                 this.socket.on('files_updated', (data) => {
@@ -824,7 +1013,175 @@
                 if (clearBtn) {
                     clearBtn.addEventListener('click', () => this.clearHistory());
                 }
+                
+                // Listen for global download state changes
+                this.socket.on('download_state_changed', (data) => {
+                    this.globalDownloadActive = data.downloading;
+                    this.activeDownloadSession = data.session_id;
+                    this.activeDownloadUrl = data.url || null;
+                    this.activeDownloadFilename = data.filename || null;
+                    
+                    // Reset progress when download starts
+                    if (data.downloading) {
+                        this.downloadProgress = '🚀 Starting download...';
+                        this.downloadProgressPercent = 0;
+                    } else {
+                        // Download ended - start 5 second timer for mini panel
+                        if (this.miniPanelHideTimeout) {
+                            clearTimeout(this.miniPanelHideTimeout);
+                        }
+                        this.miniPanelHideTimeout = setTimeout(() => {
+                            this.hideMiniPanel();
+                        }, 5000);
+                    }
+                    
+                    this.updateDownloadButton();
+                    this.updateMiniStatusPanel();
+                    
+                    if (data.downloading && data.session_id !== this.sessionId) {
+                        this.updateProgress(`🔄 Another device is downloading...`, 'info');
+                        console.log('Remote download started:', data);
+                    }
+                });
             }
+            
+            async checkDownloadStatus() {
+                try {
+                    const response = await fetch('/api/download-status');
+                    const data = await response.json();
+                    
+                    this.globalDownloadActive = data.downloading;
+                    this.activeDownloadSession = data.session_id;
+                    this.activeDownloadUrl = data.url;
+                    this.activeDownloadFilename = data.filename;
+                    
+                    if (data.downloading && data.session_id !== this.sessionId) {
+                        this.updateProgress(`🔄 Another device is downloading (${Math.round(data.duration)}s)...`, 'info');
+                    }
+                    
+                    this.updateDownloadButton();
+                    this.updateMiniStatusPanel();
+                } catch (error) {
+                    console.error('Error checking download status:', error);
+                }
+            }
+            
+            async initializeMiniStatusPanel() {
+                try {
+                    console.log('Initializing mini status panel...');
+                    
+                    // Initially hidden - will show when needed
+                    this.miniStatusVisible = false;
+                    const panel = document.getElementById('miniStatusPanel');
+                    if (panel) {
+                        panel.classList.add('hidden');
+                        console.log('Mini status panel initialized (hidden)');
+                    } else {
+                        console.error('Mini status panel element not found');
+                        return;
+                    }
+                    
+                    // Update download status
+                    this.updateMiniStatusPanel();
+                    
+                    console.log('Mini status panel initialized successfully');
+                } catch (error) {
+                    console.error('Error initializing mini status panel:', error);
+                }
+            }
+            
+            updateConnectionStatus() {
+                try {
+                    const connectionIcon = document.getElementById('connectionIcon');
+                    const connectionText = document.getElementById('connectionText');
+                    
+                    if (!connectionIcon || !connectionText) {
+                        return;
+                    }
+                    
+                    if (this.socket.connected) {
+                        connectionIcon.className = 'mini-status-icon active';
+                        connectionText.textContent = 'Connected';
+                    } else {
+                        connectionIcon.className = 'mini-status-icon error';
+                        connectionText.textContent = 'Disconnected';
+                    }
+                } catch (error) {
+                    console.error('Error updating connection status:', error);
+                }
+            }
+            
+            updateMiniStatusPanel() {
+                try {
+                    const panel = document.getElementById('miniStatusPanel');
+                    const downloadIcon = document.getElementById('downloadIcon');
+                    const downloadText = document.getElementById('downloadText');
+                    const miniStatusTitle = document.getElementById('miniStatusTitle');
+                    const miniDownloadActions = document.getElementById('miniDownloadActions');
+                    
+                    if (!panel || !downloadIcon || !downloadText || !miniStatusTitle || !miniDownloadActions) {
+                        console.error('Mini status panel elements not found');
+                        return;
+                    }
+                    
+                    // Only show mini panel on OTHER devices (not the one downloading)
+                    if (this.globalDownloadActive && this.activeDownloadSession !== this.sessionId) {
+                        // Show mini panel for remote downloads
+                        panel.classList.remove('hidden');
+                        this.miniStatusVisible = true;
+                        
+                        downloadIcon.className = 'mini-status-icon downloading';
+                        
+                        // Show progress in the second dot
+                        const progressText = this.downloadProgressPercent > 0 ? 
+                            `${this.downloadProgressPercent}% - ${this.downloadProgress}` : 
+                            this.downloadProgress;
+                        downloadText.textContent = progressText;
+                        
+                        miniStatusTitle.textContent = 'Remote Download';
+                        miniDownloadActions.style.display = 'block';
+                        
+                        console.log('Mini panel shown for remote download:', this.activeDownloadSession);
+                    } else if (!this.globalDownloadActive && this.miniPanelHideTimeout) {
+                        // Download finished - keep showing for 5 seconds with download button
+                        panel.classList.remove('hidden');
+                        this.miniStatusVisible = true;
+                        
+                        downloadIcon.className = 'mini-status-icon active';
+                        downloadText.textContent = 'Download completed!';
+                        miniStatusTitle.textContent = 'Download Ready';
+                        miniDownloadActions.style.display = 'block';
+                        
+                        console.log('Mini panel showing completed download');
+                    } else {
+                        // Hide mini panel
+                        this.hideMiniPanel();
+                    }
+                } catch (error) {
+                    console.error('Error updating mini status panel:', error);
+                }
+            }
+            
+            hideMiniPanel() {
+                try {
+                    const panel = document.getElementById('miniStatusPanel');
+                    if (panel) {
+                        panel.classList.add('hidden');
+                        this.miniStatusVisible = false;
+                        console.log('Mini panel hidden');
+                    }
+                    
+                    // Clear timeout
+                    if (this.miniPanelHideTimeout) {
+                        clearTimeout(this.miniPanelHideTimeout);
+                        this.miniPanelHideTimeout = null;
+                    }
+                } catch (error) {
+                    console.error('Error hiding mini panel:', error);
+                }
+            }
+            
+
             
             async handleSubmit(e) {
                 e.preventDefault();
@@ -1142,6 +1499,9 @@
                 if (this.isDownloading) {
                     this.downloadBtn.disabled = true;
                     this.downloadBtn.innerHTML = '<div class="loading-spinner"></div> Downloading...';
+                } else if (this.globalDownloadActive && this.activeDownloadSession !== this.sessionId) {
+                    this.downloadBtn.disabled = true;
+                    this.downloadBtn.innerHTML = '<i class="fas fa-clock"></i> Another device downloading...';
                 } else {
                     this.downloadBtn.disabled = false;
                     this.downloadBtn.innerHTML = '<i class="fas fa-download"></i> Download';
@@ -1311,6 +1671,37 @@
             document.getElementById('infoModal').style.display = 'none';
         }
         
+        // Global function for mini status panel
+        function toggleMiniStatusPanel() {
+            const panel = document.getElementById('miniStatusPanel');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                app.miniStatusVisible = true;
+            } else {
+                panel.classList.add('hidden');
+                app.miniStatusVisible = false;
+            }
+        }
+        
+        // Global function to open synced download
+        function openSyncedDownload() {
+            if (app.activeDownloadUrl) {
+                console.log('Opening synced download:', app.activeDownloadUrl);
+                app.showModal(app.activeDownloadUrl, app.activeDownloadFilename || '', false, 'TAP');
+                
+                // Sync the modal with current progress
+                if (app.downloadProgress) {
+                    app.updateProgress(app.downloadProgress, 'info');
+                }
+                if (app.downloadProgressPercent > 0) {
+                    app.progressFill.style.width = `${app.downloadProgressPercent}%`;
+                    app.progressTitle.textContent = `Progress ${app.downloadProgressPercent}%`;
+                }
+            } else {
+                console.error('No active download URL available');
+            }
+        }
+        
         // Close modals when clicking outside
         window.onclick = function(event) {
             const videoModal = document.getElementById('videoModal');
@@ -1323,5 +1714,26 @@
             }
         }
     </script>
+
+    <!-- Mini Status Panel -->
+    <div id="miniStatusPanel" class="mini-status-panel hidden">
+        <div class="mini-status-header">
+            <span id="miniStatusTitle">Remote Download</span>
+            <button class="mini-status-close" onclick="toggleMiniStatusPanel()">×</button>
+        </div>
+        <div class="mini-status-item">
+            <div id="connectionIcon" class="mini-status-icon active"></div>
+            <span id="connectionText">Connected</span>
+        </div>
+        <div class="mini-status-item">
+            <div id="downloadIcon" class="mini-status-icon downloading"></div>
+            <span id="downloadText">Remote downloading...</span>
+        </div>
+        <div id="miniDownloadActions" style="display: none;">
+            <button id="miniOpenDownloadBtn" class="btn" onclick="openSyncedDownload()">
+                <i class="fas fa-external-link-alt"></i> Open Download
+            </button>
+        </div>
+    </div>
 </body>
 </html> 

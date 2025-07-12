@@ -65,10 +65,17 @@ class KukajDownloader:
 
         wait_sec – how many seconds to passively wait after navigation so that the
         video player has time to start issuing HLS (.m3u8) requests. 12 s has
-        proven enough for Kukaj.
+        proven enough for Kukaj, but reduced for ARM devices.
         """
         self.headless = headless
-        self.wait_sec = wait_sec
+        # Reduce wait time for ARM devices to avoid timeouts
+        import platform
+        if 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower():
+            self.wait_sec = min(wait_sec, 8)  # Max 8 seconds for ARM
+            print(f"🔧 ARM device detected, reducing wait time to {self.wait_sec}s")
+        else:
+            self.wait_sec = wait_sec
+        
         self.playwright = None
         self.browser = None
         self.page = None
@@ -77,65 +84,79 @@ class KukajDownloader:
         self.setup_playwright()
     
     def setup_playwright(self):
-        """Set up Playwright with Chromium"""
+        """Set up Playwright with ARM-optimized settings"""
         try:
             print("🎭 Setting up Playwright...")
             
             # Use sync playwright for simpler API
             self.playwright = sync_playwright().start()
             
-            # Launch Firefox browser with minimal settings for proper web page loading
+            # ARM-optimized Firefox settings for Banana Pi M5
+            firefox_prefs = {
+                'network.proxy.type': 0,  # No proxy
+                'network.proxy.no_proxies_on': 'localhost, 127.0.0.1',
+                'network.http.use-cache': False,
+                'media.volume_scale': '0.0',  # Mute audio
+                'dom.webdriver.enabled': False,
+                'useAutomationExtension': False,
+                'network.trr.mode': 5,
+                # ARM optimizations
+                'gfx.canvas.azure.backends': 'cairo',  # Use software rendering
+                'layers.acceleration.disabled': True,  # Disable hardware acceleration
+                'webgl.disabled': True,  # Disable WebGL
+                'media.hardware-video-decoding.enabled': False,  # Disable hardware video decoding
+                'browser.sessionstore.resume_from_crash': False,  # Disable crash recovery
+                'browser.cache.disk.enable': False,  # Disable disk cache
+                'browser.cache.memory.enable': False,  # Disable memory cache
+            }
+            
+            # Launch Firefox browser with ARM-optimized settings
             self.browser = self.playwright.firefox.launch(
                 headless=self.headless,
-                firefox_user_prefs={
-                    'network.proxy.type': 0,  # No proxy
-                    'network.proxy.no_proxies_on': 'localhost, 127.0.0.1',
-                    'network.http.use-cache': False,
-                    'media.volume_scale': '0.0',  # Mute audio
-                    'dom.webdriver.enabled': False,
-                    'useAutomationExtension': False,
-                    'network.trr.mode': 5,
-                },
+                firefox_user_prefs=firefox_prefs,
                 args=[
-                    '--width=1920',
-                    '--height=1080',
+                    '--width=1280',  # Reduced resolution for ARM
+                    '--height=720',
                     '--no-remote',
-                    '--disable-extensions'
+                    '--disable-extensions',
+                    '--disable-dev-shm-usage',  # Avoid shared memory issues
+                    '--no-sandbox',  # Avoid sandbox issues on ARM
                 ]
             )
             
-            # Create browser context with additional settings
+            # Create browser context with ARM-optimized settings
             context = self.browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
-                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                viewport={'width': 1280, 'height': 720},  # Reduced viewport
                 ignore_https_errors=True,
                 java_script_enabled=True,
                 bypass_csp=True,
                 extra_http_headers={
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                     'Accept-Language': 'en-US,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept-Encoding': 'gzip, deflate',  # Removed br for ARM compatibility
                     'Connection': 'keep-alive',
                     'Upgrade-Insecure-Requests': '1',
-                    'Cache-Control': 'max-age=0'
+                    'Cache-Control': 'no-cache'
                 }
             )
             
-            # Store context for later (e.g., cookie extraction)
+            # Store context for later
             self.context = context
 
             # Create page
             self.page = context.new_page()
             
-            # Set longer timeouts for better reliability
-            self.page.set_default_timeout(60000)  # 60 seconds
-            self.page.set_default_navigation_timeout(60000)  # 60 seconds
+            # ARM-optimized timeouts (shorter for better reliability)
+            self.page.set_default_timeout(30000)  # 30 seconds
+            self.page.set_default_navigation_timeout(30000)  # 30 seconds
             
-            print("✅ Playwright setup complete")
+            print("✅ Playwright setup complete (ARM-optimized)")
             
         except Exception as e:
             print(f"❌ Failed to initialize Playwright: {e}")
             print("💡 Try running: playwright install firefox")
+            print("💡 On ARM devices, ensure you have sufficient memory and swap space")
             raise
     
     # ------------------------------------------------------------------
@@ -191,92 +212,375 @@ class KukajDownloader:
 
             # Optionally click desired source button (MON/TAP/MIX …)
             if source:
-                try:
-                    # Ensure source menu is present
-                    self.page.wait_for_selector("div.subplayermenu", timeout=5000)
-
-                    # Playwright best-practice: use :has-text() or get_by_text for reliability
-                    print(f"➡️  Activating source button: {source.upper()}")
-                    btn_locator = self.page.locator("div.subplayermenu").get_by_text(source.upper(), exact=True)
-                    awaitable = None
+                source_activated = False
+                max_source_attempts = 3
+                source_attempt = 0
+                
+                while not source_activated and source_attempt < max_source_attempts:
+                    source_attempt += 1
                     try:
-                        if btn_locator.count() == 0:
-                            # Fallback – search anywhere on the page
-                            btn_locator = self.page.get_by_text(source.upper(), exact=True)
+                        print(f"➡️  Activating source button: {source.upper()} (attempt {source_attempt}/{max_source_attempts})")
+                        
+                        # Wait for page to be ready
+                        self.page.wait_for_load_state('domcontentloaded', timeout=10000)
+                        
+                        # Try to find source menu with increased timeout for ARM devices
+                        try:
+                            self.page.wait_for_selector("div.subplayermenu", timeout=8000)
+                        except:
+                            print("⚠️  Source menu not found, trying alternative selectors...")
+                            # Try alternative selectors
+                            try:
+                                self.page.wait_for_selector(f"[data-source='{source.upper()}']", timeout=3000)
+                            except:
+                                try:
+                                    self.page.wait_for_selector(f"button:has-text('{source.upper()}')", timeout=3000)
+                                except:
+                                    pass
 
-                        if btn_locator.count() == 0:
-                            raise ValueError("Source button not found")
+                        # Multiple strategies to find and click the source button
+                        btn_locator = None
+                        
+                        # Strategy 1: Look in subplayermenu
+                        try:
+                            btn_locator = self.page.locator("div.subplayermenu").get_by_text(source.upper(), exact=True)
+                            if btn_locator.count() > 0:
+                                print(f"✅ Found source button in subplayermenu")
+                            else:
+                                btn_locator = None
+                        except:
+                            pass
+                        
+                        # Strategy 2: Look anywhere on page
+                        if not btn_locator or btn_locator.count() == 0:
+                            try:
+                                btn_locator = self.page.get_by_text(source.upper(), exact=True)
+                                if btn_locator.count() > 0:
+                                    print(f"✅ Found source button on page")
+                                else:
+                                    btn_locator = None
+                            except:
+                                pass
+                        
+                        # Strategy 3: Look for data attributes or class names
+                        if not btn_locator or btn_locator.count() == 0:
+                            try:
+                                btn_locator = self.page.locator(f"[data-source='{source.upper()}'], [data-host='{source.upper()}'], .source-{source.lower()}")
+                                if btn_locator.count() > 0:
+                                    print(f"✅ Found source button by data attributes")
+                                else:
+                                    btn_locator = None
+                            except:
+                                pass
 
-                        # Check if it's an <a href="/something"> link
+                        if not btn_locator or btn_locator.count() == 0:
+                            print(f"⚠️  Source button '{source.upper()}' not found (attempt {source_attempt})")
+                            if source_attempt < max_source_attempts:
+                                self.page.wait_for_timeout(2000)  # Wait before retry
+                                continue
+                            else:
+                                break
+
+                        # Check if it's a navigation link
                         href = btn_locator.first.get_attribute("href")
 
                         if href and href not in ("#", "", "javascript:void(0)"):
                             from urllib.parse import urljoin
                             next_url = urljoin(url, href)
                             print(f"↪️  Navigating to source URL: {next_url}")
-                            self.page.goto(next_url, wait_until='domcontentloaded', timeout=30000)
-
-                            # If destination is a Streamtape page, grab video source instantly
-                            if any(x in self.page.url for x in ["streamtape.com", "tapecontent.net", "streamta.pe"]):
-                                try:
-                                    self.page.wait_for_selector("video", timeout=5000)
-                                    direct_src = self.page.evaluate("() => document.querySelector('video') && document.querySelector('video').src")
-                                    if direct_src and direct_src.startswith('http') and direct_src not in found_urls:
-                                        found_urls.append(direct_src)
-                                        print(f"🎯 Found media URL from direct Streamtape page: {direct_src}")
-                                except Exception as st_err:
-                                    print(f"⚠️  Streamtape direct extraction failed: {st_err}")
+                            
+                            try:
+                                self.page.goto(next_url, wait_until='domcontentloaded', timeout=20000)
+                                source_activated = True
+                                
+                                # If destination is a Streamtape page, grab video source instantly
+                                if any(x in self.page.url for x in ["streamtape.com", "tapecontent.net", "streamta.pe"]):
+                                    try:
+                                        self.page.wait_for_selector("video", timeout=8000)
+                                        direct_src = self.page.evaluate("() => document.querySelector('video') && document.querySelector('video').src")
+                                        if direct_src and direct_src.startswith('http') and direct_src not in found_urls:
+                                            found_urls.append(direct_src)
+                                            print(f"🎯 Found media URL from direct Streamtape page: {direct_src}")
+                                    except Exception as st_err:
+                                        print(f"⚠️  Streamtape direct extraction failed: {st_err}")
+                            except Exception as nav_err:
+                                print(f"⚠️  Navigation failed: {nav_err}")
+                                continue
                         else:
-                            # Serial pages sometimes place source links as plain anchors outside subplayermenu
-                            # Quick path: look for any <a> containing the source text and an href ending with a digit
-                            if source.upper() == 'TAP':
+                            # Try clicking the button
+                            try:
+                                # Handle TAP source special case for series
+                                if source.upper() == 'TAP':
+                                    try:
+                                        # Try multiple TAP button selectors (more comprehensive)
+                                        tap_selectors = [
+                                            f"a:has-text('{source.upper()}')",
+                                            f"button:has-text('{source.upper()}')",
+                                            f"[data-source='{source.upper()}']",
+                                            f"[data-host='{source.upper()}']",
+                                            f"[data-name='{source.upper()}']",
+                                            f"[title='{source.upper()}']",
+                                            ".tap-button",
+                                            ".source-tap",
+                                            ".btn-tap",
+                                            f"span:has-text('{source.upper()}')",
+                                            f"div:has-text('{source.upper()}')",
+                                            f"*:has-text('{source.upper()}')",
+                                            # Also try lowercase variants
+                                            f"a:has-text('{source.lower()}')",
+                                            f"button:has-text('{source.lower()}')",
+                                            f"[data-source='{source.lower()}']",
+                                            f"[data-host='{source.lower()}']"
+                                        ]
+                                        
+                                        for selector in tap_selectors:
+                                            try:
+                                                tap_element = self.page.locator(selector).first
+                                                if tap_element.count() > 0:
+                                                    print(f"✅ Found TAP element with selector: {selector}")
+                                                    
+                                                    # Check if it's a navigation link
+                                                    href_raw = tap_element.get_attribute('href')
+                                                    if href_raw and href_raw not in ("#", "javascript:void(0)", ""):
+                                                        from urllib.parse import urljoin
+                                                        abs_href = urljoin(url, href_raw)
+                                                        if abs_href != self.page.url:
+                                                            print(f"↪️  TAP navigation to: {abs_href}")
+                                                            self.page.goto(abs_href, wait_until='domcontentloaded', timeout=20000)
+                                                            source_activated = True
+                                                            self.page.wait_for_timeout(3000)  # Allow embedded player to load
+                                                            break
+                                                    else:
+                                                        # Try clicking the element
+                                                        tap_element.click(timeout=5000)
+                                                        source_activated = True
+                                                        print(f"✅ Successfully clicked TAP element")
+                                                        self.page.wait_for_timeout(3000)  # Allow content to load
+                                                        break
+                                            except Exception as tap_err:
+                                                print(f"⚠️ TAP selector '{selector}' failed: {tap_err}")
+                                                continue
+                                        
+                                        if not source_activated:
+                                            print("⚠️ All TAP selectors failed, trying generic approach")
+                                            # Try to click any element containing TAP text as last resort
+                                            try:
+                                                import re
+                                                generic_tap = self.page.locator("*").filter(has_text=re.compile(r"TAP|tap", re.IGNORECASE)).first
+                                                if generic_tap.count() > 0:
+                                                    print("🔍 Found generic TAP element, attempting click...")
+                                                    generic_tap.click(timeout=5000)
+                                                    source_activated = True
+                                                    print("✅ Successfully clicked generic TAP element")
+                                                    self.page.wait_for_timeout(3000)
+                                            except Exception as generic_err:
+                                                print(f"⚠️ Generic TAP click failed: {generic_err}")
+                                            
+                                    except Exception as tap_general_err:
+                                        print(f"⚠️ TAP special handling failed: {tap_general_err}")
+                                
+                                if not source_activated:
+                                    # Regular click
+                                    btn_locator.first.click(timeout=8000)
+                                    source_activated = True
+                                    print(f"✅ Successfully clicked source button")
+                                    
+                            except Exception as click_err:
+                                print(f"⚠️  Click failed: {click_err}")
+                                # Try JavaScript click as fallback
                                 try:
-                                    generic_anchor = self.page.locator(f"a:has-text('{source.upper()}')").first
-                                    if generic_anchor.count() > 0:
-                                        href_raw = generic_anchor.get_attribute('href')
-                                        if href_raw and href_raw not in ("#", "javascript:void(0)"):
-                                            from urllib.parse import urljoin
-                                            abs_href = urljoin(url, href_raw)
-                                            if abs_href != self.page.url:
-                                                print(f"↪️  Direct anchor navigation to: {abs_href}")
-                                                self.page.goto(abs_href, wait_until='domcontentloaded', timeout=30000)
-                                                # allow embedded player to load
-                                                self.page.wait_for_timeout(4000)
+                                    self.page.evaluate("el => el.click()", btn_locator.first)
+                                    source_activated = True
+                                    print(f"✅ Successfully clicked source button via JS")
+                                except Exception as js_err:
+                                    print(f"⚠️  JavaScript click failed: {js_err}")
+                                    continue
+
+                        # If source was activated, wait for content to load
+                        if source_activated:
+                            try:
+                                self.page.wait_for_load_state('networkidle', timeout=8000)
+                            except Exception:
+                                # Fallback to passive wait
+                                self.page.wait_for_timeout(3000)
+                            
+                            # Immediate frame scan for Streamtape
+                            for frm in self.page.frames:
+                                try:
+                                    if 'streamtape' in frm.url or 'streamta.pe' in frm.url:
+                                        candidate = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
+                                        if candidate and candidate.startswith('http') and candidate not in found_urls:
+                                            found_urls.append(candidate)
+                                            print(f"🎯 Found media URL via immediate Streamtape scan: {candidate}")
                                 except Exception:
                                     pass
-                            # Regular in-page AJAX style: just click
-                            btn_locator.first.click(timeout=5000)
-                    except Exception as e:
-                        print(f"⚠️  Activating source via click/navigation failed: {e}")
-                        # final fallback – trigger click via JS if we still have element
-                        try:
-                            self.page.evaluate("el => el.click()", btn_locator.first)
-                        except Exception:
-                            pass
+                            break
+                            
+                    except Exception as source_err:
+                        print(f"⚠️  Source activation attempt {source_attempt} failed: {source_err}")
+                        if source_attempt < max_source_attempts:
+                            self.page.wait_for_timeout(2000)  # Wait before retry
+                            continue
+                        else:
+                            break
+                
+                if not source_activated:
+                    print(f"❌ Failed to activate source '{source.upper()}' after {max_source_attempts} attempts")
 
-                    # give site some time after activating new source – wait for network idle
+            # TAP-specific iframe scanning - run even if source activation appears to fail
+            if source and source.upper() == 'TAP':
+                print("🔍 TAP-specific iframe scanning...")
+                
+                # Wait 5 seconds for TAP content to load
+                print("⌛ Waiting 5 seconds for TAP content...")
+                self.page.wait_for_timeout(5000)
+                
+                # Fast iframe scanning - prioritize relevant frames only
+                iframe_found = False
+                all_frames = self.page.frames
+                print(f"🔍 Found {len(all_frames)} total frames")
+                
+                # Filter and prioritize frames
+                priority_frames = []
+                secondary_frames = []
+                
+                for frm in all_frames:
                     try:
-                        self.page.wait_for_load_state('networkidle', timeout=10000)
+                        frame_url = frm.url.lower()
+                        
+                        # Priority 1: Streamtape/TAP frames (most important)
+                        if any(domain in frame_url for domain in ['streamtape', 'streamta.pe', 'tapecontent']):
+                            priority_frames.append((frm, 'streamtape'))
+                        # Priority 2: Video/player frames
+                        elif any(domain in frame_url for domain in ['video', 'player', 'embed']):
+                            secondary_frames.append((frm, 'video'))
+                        # Skip: about:blank, ads, trackers, recaptcha, etc.
+                        elif any(skip in frame_url for skip in ['about:blank', 'google.com', 'ads', 'analytics', 'tracker', 'popmonetizer', 'zeusadx', 'storage.', 'count.html']):
+                            continue
+                        # Priority 3: Other frames from main domain
+                        elif 'kukaj' in frame_url:
+                            secondary_frames.append((frm, 'kukaj'))
                     except Exception:
-                        # ignore timeout – we'll rely on passive wait below
-                        pass
-                    # extra passive wait for any iframe traffic
-                    self.page.wait_for_timeout(4000)
-                    # Immediate frame scan for Streamtape
-                    for frm in self.page.frames:
+                        continue
+                
+                print(f"🎯 Scanning {len(priority_frames)} priority frames + {len(secondary_frames)} secondary frames")
+                
+                # Scan priority frames first (Streamtape)
+                for frm, frame_type in priority_frames:
+                    try:
+                        frame_url = frm.url
+                        print(f"🔥 Priority scan: {frame_url}")
+                        
+                        # Quick video element check (500ms timeout)
                         try:
-                            if 'streamtape' in frm.url or 'streamta.pe' in frm.url:
-                                candidate = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
-                                if candidate and candidate.startswith('http') and candidate not in found_urls:
-                                    found_urls.append(candidate)
-                                    print(f"🎯 Found media URL via immediate Streamtape scan: {candidate}")
+                            frm.wait_for_selector("video", timeout=500)
+                            video_src = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
+                            
+                            if video_src and video_src.startswith('http') and video_src not in found_urls:
+                                found_urls.append(video_src)
+                                print(f"🎯 Found MP4 URL in video element: {video_src}")
+                                iframe_found = True
+                                break
                         except Exception:
                             pass
-                except Exception as click_err:
-                    print(f"⚠️  Unable to activate source '{source}': {click_err}")
-
-            # Passive wait – only if we *still* have no URL
-            if not found_urls:
+                        
+                        # Quick script scan for Streamtape
+                        try:
+                            mp4_links = frm.evaluate("""
+                                () => {
+                                    const links = [];
+                                    // Quick scan for MP4 URLs in scripts
+                                    document.querySelectorAll('script').forEach(script => {
+                                        const content = script.textContent || script.innerHTML;
+                                        const mp4Matches = content.match(/https?:\/\/[^"'\\s]+\.mp4[^"'\\s]*/g);
+                                        if (mp4Matches) {
+                                            links.push(...mp4Matches);
+                                        }
+                                    });
+                                    return [...new Set(links)];
+                                }
+                            """)
+                            
+                            for link in mp4_links:
+                                if link not in found_urls:
+                                    found_urls.append(link)
+                                    print(f"🎯 Found MP4 link in Streamtape frame: {link}")
+                                    iframe_found = True
+                                    break
+                                    
+                        except Exception:
+                            pass
+                        
+                        if iframe_found:
+                            break
+                            
+                    except Exception as frame_err:
+                        print(f"⚠️ Error scanning priority frame: {frame_err}")
+                        continue
+                
+                # Only scan secondary frames if nothing found in priority frames
+                if not iframe_found and len(secondary_frames) > 0:
+                    print(f"🔍 Scanning {min(5, len(secondary_frames))} secondary frames...")
+                    
+                    for frm, frame_type in secondary_frames[:5]:  # Limit to first 5 secondary frames
+                        try:
+                            frame_url = frm.url
+                            print(f"🔍 Secondary scan: {frame_url}")
+                            
+                            # Very quick scan (200ms timeout)
+                            try:
+                                frm.wait_for_selector("video", timeout=200)
+                                video_src = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
+                                
+                                if video_src and video_src.startswith('http') and video_src not in found_urls:
+                                    found_urls.append(video_src)
+                                    print(f"🎯 Found MP4 URL in secondary frame: {video_src}")
+                                    iframe_found = True
+                                    break
+                            except Exception:
+                                pass
+                                
+                        except Exception:
+                            continue
+                
+                # If no iframe results, try more aggressive scanning
+                if not iframe_found and not found_urls:
+                    print("🔍 TAP iframe scan failed, trying more aggressive approach...")
+                    
+                    # Try to find any Streamtape-related URLs in page source
+                    try:
+                        page_content = self.page.content()
+                        import re
+                        
+                        # Look for Streamtape URLs in page source
+                        streamtape_patterns = [
+                            r'https?://[^"\'\\s]*streamtape[^"\'\\s]*\.mp4[^"\'\\s]*',
+                            r'https?://[^"\'\\s]*streamta\.pe[^"\'\\s]*\.mp4[^"\'\\s]*',
+                            r'https?://[^"\'\\s]*tapecontent[^"\'\\s]*\.mp4[^"\'\\s]*',
+                            r'https?://[^"\'\\s]*streamtape[^"\'\\s]*get_video[^"\'\\s]*'
+                        ]
+                        
+                        for pattern in streamtape_patterns:
+                            matches = re.findall(pattern, page_content, re.IGNORECASE)
+                            for match in matches:
+                                if match not in found_urls:
+                                    found_urls.append(match)
+                                    print(f"🎯 Found Streamtape URL in page source: {match}")
+                                    iframe_found = True
+                    except Exception as source_err:
+                        print(f"⚠️ Page source scan failed: {source_err}")
+                    
+                    # If still nothing, wait for media requests (fallback)
+                    if not iframe_found and not found_urls:
+                        print("⌛ All TAP methods failed, waiting 12 seconds for media requests fallback...")
+                        self.page.wait_for_timeout(12000)
+                    else:
+                        print("✅ TAP aggressive scan found results")
+                else:
+                    print("✅ TAP iframe scan completed successfully")
+            
+            # Regular passive wait for non-TAP sources or if no URLs found
+            elif not found_urls:
                 print(f"⌛ Passive wait {self.wait_sec}s for media requests …")
                 self.page.wait_for_timeout(self.wait_sec * 1000)
             else:
@@ -568,10 +872,39 @@ class KukajDownloader:
     
     def close(self):
         """Close browser and cleanup"""
-        if self.browser:
-            self.browser.close()
-        if self.playwright:
-            self.playwright.stop()
+        try:
+            if self.page:
+                try:
+                    self.page.close()
+                except:
+                    pass
+            if self.context:
+                try:
+                    self.context.close()
+                except:
+                    pass
+            if self.browser:
+                try:
+                    self.browser.close()
+                except:
+                    pass
+            if self.playwright:
+                try:
+                    self.playwright.stop()
+                except:
+                    pass
+            print("🧹 Browser closed and resources cleaned up")
+        except Exception as e:
+            print(f"⚠️ Error during cleanup: {e}")
+            # Force cleanup on ARM devices
+            import platform
+            if 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower():
+                try:
+                    import subprocess
+                    subprocess.run(['pkill', '-f', 'firefox'], stderr=subprocess.DEVNULL)
+                    print("🔧 Force-killed Firefox processes on ARM device")
+                except:
+                    pass
     
     def __enter__(self):
         return self
