@@ -258,6 +258,33 @@ class KukajDownloader:
         found_urls: list[str] = []
 
         try:
+            # For TAP source, use only the legacy extractor which is proven to work
+            if source and source.upper() == 'TAP':
+                print("🔄 Using legacy TAP extractor directly")
+                self._tap_extract_legacy(url, found_urls)
+                
+                # Filter URLs to include only legitimate video sources (exclude ads)
+                if found_urls:
+                    filtered_urls = []
+                    for u in found_urls:
+                        # Only keep URLs from known video hosts
+                        if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe', '.mp4', '.m3u8']):
+                            filtered_urls.append(u)
+                    
+                    if filtered_urls:
+                        print(f"🎯 Filtered {len(found_urls)} URLs to {len(filtered_urls)} legitimate video sources")
+                        found_urls = filtered_urls
+                    else:
+                        print("⚠️ All found URLs were filtered out as potential ads")
+                
+                # If we found valid URLs, return them immediately
+                if found_urls:
+                    print(f"🎉 Found {len(found_urls)} media URL(s)")
+                    for i, fu in enumerate(found_urls, 1):
+                        print(f"   {i}. {fu}")
+                    return found_urls
+            
+            # For non-TAP sources or if TAP legacy extractor found nothing, continue with normal flow
             # -----------------------------------------------------------
             # Network sniffers – watch every request AND response in page
             # -----------------------------------------------------------
@@ -266,9 +293,12 @@ class KukajDownloader:
 
             def _sniff(route_or_resp):
                 u = route_or_resp.url.lower()
+                # Filter URLs to include only legitimate video sources (exclude ads)
                 if (".m3u8" in u or ".mp4" in u) and (u not in found_urls):
-                    found_urls.append(route_or_resp.url)
-                    print(f"🎯 Found media URL: {route_or_resp.url}")
+                    # Only add URLs from known video hosts or with video extensions
+                    if any(host in u for host in ['streamtape', 'tapecontent', 'streamta.pe']) or u.endswith('.mp4') or u.endswith('.m3u8'):
+                        found_urls.append(route_or_resp.url)
+                        print(f"🎯 Found media URL: {route_or_resp.url}")
 
             ctx.on('request', _sniff)
             ctx.on('response', _sniff)
@@ -382,81 +412,10 @@ class KukajDownloader:
                         else:
                             # Try clicking the button
                             try:
-                                # Handle TAP source special case for series
-                                if source.upper() == 'TAP':
-                                    try:
-                                        # Try multiple TAP button selectors (more comprehensive)
-                                        tap_selectors = [
-                                            f"a:has-text('{source.upper()}')",
-                                            f"button:has-text('{source.upper()}')",
-                                            f"[data-source='{source.upper()}']",
-                                            f"[data-host='{source.upper()}']",
-                                            f"[data-name='{source.upper()}']",
-                                            f"[title='{source.upper()}']",
-                                            ".tap-button",
-                                            ".source-tap",
-                                            ".btn-tap",
-                                            f"span:has-text('{source.upper()}')",
-                                            f"div:has-text('{source.upper()}')",
-                                            f"*:has-text('{source.upper()}')",
-                                            # Also try lowercase variants
-                                            f"a:has-text('{source.lower()}')",
-                                            f"button:has-text('{source.lower()}')",
-                                            f"[data-source='{source.lower()}']",
-                                            f"[data-host='{source.lower()}']"
-                                        ]
-                                        
-                                        for selector in tap_selectors:
-                                            try:
-                                                tap_element = self.page.locator(selector).first
-                                                if tap_element.count() > 0:
-                                                    print(f"✅ Found TAP element with selector: {selector}")
-                                                    
-                                                    # Check if it's a navigation link
-                                                    href_raw = tap_element.get_attribute('href')
-                                                    if href_raw and href_raw not in ("#", "javascript:void(0)", ""):
-                                                        from urllib.parse import urljoin
-                                                        abs_href = urljoin(url, href_raw)
-                                                        if abs_href != self.page.url:
-                                                            print(f"↪️  TAP navigation to: {abs_href}")
-                                                            self.page.goto(abs_href, wait_until='domcontentloaded', timeout=20000)
-                                                            source_activated = True
-                                                            self.page.wait_for_timeout(3000)  # Allow embedded player to load
-                                                            break
-                                                    else:
-                                                        # Try clicking the element
-                                                        tap_element.click(timeout=5000)
-                                                        source_activated = True
-                                                        print(f"✅ Successfully clicked TAP element")
-                                                        self.page.wait_for_timeout(3000)  # Allow content to load
-                                                        break
-                                            except Exception as tap_err:
-                                                print(f"⚠️ TAP selector '{selector}' failed: {tap_err}")
-                                                continue
-                                        
-                                        if not source_activated:
-                                            print("⚠️ All TAP selectors failed, trying generic approach")
-                                            # Try to click any element containing TAP text as last resort
-                                            try:
-                                                import re
-                                                generic_tap = self.page.locator("*").filter(has_text=re.compile(r"TAP|tap", re.IGNORECASE)).first
-                                                if generic_tap.count() > 0:
-                                                    print("🔍 Found generic TAP element, attempting click...")
-                                                    generic_tap.click(timeout=5000)
-                                                    source_activated = True
-                                                    print("✅ Successfully clicked generic TAP element")
-                                                    self.page.wait_for_timeout(3000)
-                                            except Exception as generic_err:
-                                                print(f"⚠️ Generic TAP click failed: {generic_err}")
-                                            
-                                    except Exception as tap_general_err:
-                                        print(f"⚠️ TAP special handling failed: {tap_general_err}")
-                                
-                                if not source_activated:
-                                    # Regular click
-                                    btn_locator.first.click(timeout=8000)
-                                    source_activated = True
-                                    print(f"✅ Successfully clicked source button")
+                                # Regular click
+                                btn_locator.first.click(timeout=8000)
+                                source_activated = True
+                                print(f"✅ Successfully clicked source button")
                                     
                             except Exception as click_err:
                                 print(f"⚠️  Click failed: {click_err}")
@@ -499,161 +458,9 @@ class KukajDownloader:
                 
                 if not source_activated:
                     print(f"❌ Failed to activate source '{source.upper()}' after {max_source_attempts} attempts")
-
-            # TAP-specific iframe scanning - run even if source activation appears to fail
-            if source and source.upper() == 'TAP':
-                print("🔍 TAP-specific iframe scanning...")
-                
-                # Wait 5 seconds for TAP content to load
-                print("⌛ Waiting 5 seconds for TAP content...")
-                self.page.wait_for_timeout(5000)
-                
-                # Fast iframe scanning - prioritize relevant frames only
-                iframe_found = False
-                all_frames = self.page.frames
-                print(f"🔍 Found {len(all_frames)} total frames")
-                
-                # Filter and prioritize frames
-                priority_frames = []
-                secondary_frames = []
-                
-                for frm in all_frames:
-                    try:
-                        frame_url = frm.url.lower()
-                        
-                        # Priority 1: Streamtape/TAP frames (most important)
-                        if any(domain in frame_url for domain in ['streamtape', 'streamta.pe', 'tapecontent']):
-                            priority_frames.append((frm, 'streamtape'))
-                        # Priority 2: Video/player frames
-                        elif any(domain in frame_url for domain in ['video', 'player', 'embed']):
-                            secondary_frames.append((frm, 'video'))
-                        # Skip: about:blank, ads, trackers, recaptcha, etc.
-                        elif any(skip in frame_url for skip in ['about:blank', 'google.com', 'ads', 'analytics', 'tracker', 'popmonetizer', 'zeusadx', 'storage.', 'count.html']):
-                            continue
-                        # Priority 3: Other frames from main domain
-                        elif 'kukaj' in frame_url:
-                            secondary_frames.append((frm, 'kukaj'))
-                    except Exception:
-                        continue
-                
-                print(f"🎯 Scanning {len(priority_frames)} priority frames + {len(secondary_frames)} secondary frames")
-                
-                # Scan priority frames first (Streamtape)
-                for frm, frame_type in priority_frames:
-                    try:
-                        frame_url = frm.url
-                        print(f"🔥 Priority scan: {frame_url}")
-                        
-                        # Quick video element check (500ms timeout)
-                        try:
-                            frm.wait_for_selector("video", timeout=500)
-                            video_src = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
-                            
-                            if video_src and video_src.startswith('http') and video_src not in found_urls:
-                                found_urls.append(video_src)
-                                print(f"🎯 Found MP4 URL in video element: {video_src}")
-                                iframe_found = True
-                                break
-                        except Exception:
-                            pass
-                        
-                        # Quick script scan for Streamtape
-                        try:
-                            mp4_links = frm.evaluate("""
-                                () => {
-                                    const links = [];
-                                    // Quick scan for MP4 URLs in scripts
-                                    document.querySelectorAll('script').forEach(script => {
-                                        const content = script.textContent || script.innerHTML;
-                                        const mp4Matches = content.match(/https?:\/\/[^"'\\s]+\.mp4[^"'\\s]*/g);
-                                        if (mp4Matches) {
-                                            links.push(...mp4Matches);
-                                        }
-                                    });
-                                    return [...new Set(links)];
-                                }
-                            """)
-                            
-                            for link in mp4_links:
-                                if link not in found_urls:
-                                    found_urls.append(link)
-                                    print(f"🎯 Found MP4 link in Streamtape frame: {link}")
-                                    iframe_found = True
-                                    break
-                                    
-                        except Exception:
-                            pass
-                        
-                        if iframe_found:
-                            break
-                            
-                    except Exception as frame_err:
-                        print(f"⚠️ Error scanning priority frame: {frame_err}")
-                        continue
-                
-                # Only scan secondary frames if nothing found in priority frames
-                if not iframe_found and len(secondary_frames) > 0:
-                    print(f"🔍 Scanning {min(5, len(secondary_frames))} secondary frames...")
-                    
-                    for frm, frame_type in secondary_frames[:5]:  # Limit to first 5 secondary frames
-                        try:
-                            frame_url = frm.url
-                            print(f"🔍 Secondary scan: {frame_url}")
-                            
-                            # Very quick scan (200ms timeout)
-                            try:
-                                frm.wait_for_selector("video", timeout=200)
-                                video_src = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
-                                
-                                if video_src and video_src.startswith('http') and video_src not in found_urls:
-                                    found_urls.append(video_src)
-                                    print(f"🎯 Found MP4 URL in secondary frame: {video_src}")
-                                    iframe_found = True
-                                    break
-                            except Exception:
-                                pass
-                                
-                        except Exception:
-                            continue
-                
-                # If no iframe results, try more aggressive scanning
-                if not iframe_found and not found_urls:
-                    print("🔍 TAP iframe scan failed, trying more aggressive approach...")
-                    
-                    # Try to find any Streamtape-related URLs in page source
-                    try:
-                        page_content = self.page.content()
-                        import re
-                        
-                        # Look for Streamtape URLs in page source
-                        streamtape_patterns = [
-                            r'https?://[^"\'\\s]*streamtape[^"\'\\s]*\.mp4[^"\'\\s]*',
-                            r'https?://[^"\'\\s]*streamta\.pe[^"\'\\s]*\.mp4[^"\'\\s]*',
-                            r'https?://[^"\'\\s]*tapecontent[^"\'\\s]*\.mp4[^"\'\\s]*',
-                            r'https?://[^"\'\\s]*streamtape[^"\'\\s]*get_video[^"\'\\s]*'
-                        ]
-                        
-                        for pattern in streamtape_patterns:
-                            matches = re.findall(pattern, page_content, re.IGNORECASE)
-                            for match in matches:
-                                if match not in found_urls:
-                                    found_urls.append(match)
-                                    print(f"🎯 Found Streamtape URL in page source: {match}")
-                                    iframe_found = True
-                    except Exception as source_err:
-                        print(f"⚠️ Page source scan failed: {source_err}")
-                    
-                    # If still nothing, wait for media requests (fallback)
-                    if not iframe_found and not found_urls:
-                        print("⌛ All TAP methods failed, waiting 12 seconds for media requests fallback...")
-                        self.page.wait_for_timeout(12000)
-                    else:
-                        print("✅ TAP aggressive scan found results")
-                else:
-                    print("✅ TAP iframe scan completed successfully")
             
             # Regular passive wait for non-TAP sources or if no URLs found
-            elif not found_urls:
+            if not found_urls:
                 print(f"⌛ Passive wait {self.wait_sec}s for media requests …")
                 self.page.wait_for_timeout(self.wait_sec * 1000)
             else:
@@ -662,16 +469,47 @@ class KukajDownloader:
             # Deduplicate
             found_urls = list(dict.fromkeys(found_urls))
 
+            # Final filtering to exclude ad URLs
+            if found_urls:
+                filtered_urls = []
+                for u in found_urls:
+                    # Only keep URLs from known video hosts or with video extensions
+                    if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe']) or u.lower().endswith('.mp4') or u.lower().endswith('.m3u8'):
+                        filtered_urls.append(u)
+                
+                if len(filtered_urls) < len(found_urls):
+                    print(f"🎯 Filtered {len(found_urls)} URLs to {len(filtered_urls)} legitimate video sources")
+                    found_urls = filtered_urls
+
             if found_urls:
                 print(f"🎉 Found {len(found_urls)} media URL(s)")
                 for i, fu in enumerate(found_urls, 1):
                     print(f"   {i}. {fu}")
             else:
                 print("❌ No media URLs found")
-
-            # If no URLs found and TAP requested, try built-in legacy routine once
-            if (not found_urls) and source and source.upper() == 'TAP':
-                self._tap_extract_legacy(url, found_urls)
+                
+                # If no URLs found with normal flow, try legacy TAP extractor as last resort
+                if source and source.upper() == 'TAP':
+                    print("🔄 Trying legacy TAP extractor as last resort")
+                    self._tap_extract_legacy(url, found_urls)
+                    
+                    # Filter URLs again
+                    if found_urls:
+                        filtered_urls = []
+                        for u in found_urls:
+                            if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe']) or u.lower().endswith('.mp4') or u.lower().endswith('.m3u8'):
+                                filtered_urls.append(u)
+                        
+                        if filtered_urls:
+                            print(f"🎯 Filtered {len(found_urls)} URLs to {len(filtered_urls)} legitimate video sources")
+                            found_urls = filtered_urls
+                        else:
+                            print("⚠️ All found URLs were filtered out as potential ads")
+                    
+                    if found_urls:
+                        print(f"🎉 Found {len(found_urls)} media URL(s) with legacy extractor")
+                        for i, fu in enumerate(found_urls, 1):
+                            print(f"   {i}. {fu}")
 
         except Exception as e:
             print(f"❌ Error extracting media URLs: {e}")
