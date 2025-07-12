@@ -839,6 +839,9 @@
                 this.downloadProgress = '';
                 this.downloadProgressPercent = 0;
                 this.miniPanelHideTimeout = null;
+                this.lastRemoteDownloadUrl = null;
+                this.lastRemoteDownloadType = null;
+                this.lastRemoteDownloadFilename = null;
                 
                 this.form = document.getElementById('downloadForm');
                 this.urlInput = document.getElementById('videoUrl');
@@ -926,17 +929,23 @@
                         this.downloadProgressPercent = data.success ? 100 : 0;
                         this.updateMiniStatusPanel();
                         
+                        // Store the download URL for later access
+                        if (data.success && data.download_url) {
+                            this.lastRemoteDownloadUrl = data.download_url;
+                            this.lastRemoteDownloadType = data.file_type;
+                            this.lastRemoteDownloadFilename = data.filename;
+                        }
+                        
                         // Also sync the download modal if it's open
                         if (this.modal && !this.modal.classList.contains('hidden')) {
-                            if (data.success) {
+                            if (data.success && data.download_url) {
                                 this.updateProgress('✅ Download completed successfully!', 'success');
                                 this.progressFill.style.width = '100%';
                                 this.progressTitle.textContent = 'Progress 100%';
                                 
-                                // Show download link
-                                setTimeout(() => {
-                                    this.setupVideoPreviewFromFilename(data.filename);
-                                }, 1000);
+                                // Show download link from remote device
+                                this.handleMediaUrl(data.download_url, data.file_type);
+                                this.updateProgress('🔗 Download link ready (from another device)', 'success');
                             } else {
                                 this.updateProgress('❌ Download failed', 'error');
                             }
@@ -1115,13 +1124,13 @@
                         miniDownloadActions.style.display = 'block';
                         
                         console.log('Mini panel shown for remote download:', this.activeDownloadSession);
-                    } else if (!this.globalDownloadActive && this.miniPanelHideTimeout) {
+                    } else if (!this.globalDownloadActive && (this.miniPanelHideTimeout || this.lastRemoteDownloadUrl)) {
                         // Download finished - keep showing for 5 seconds with download button
                         panel.classList.remove('hidden');
                         this.miniStatusVisible = true;
                         
                         downloadIcon.className = 'mini-status-icon active';
-                        downloadText.textContent = 'Download completed!';
+                        downloadText.textContent = this.lastRemoteDownloadUrl ? 'Download ready from another device!' : 'Download completed!';
                         miniStatusTitle.textContent = 'Download Ready';
                         miniDownloadActions.style.display = 'block';
                         
@@ -1703,8 +1712,26 @@
         
         // Global function to open synced download
         function openSyncedDownload() {
+            // Check if there's a completed remote download
+            if (app.lastRemoteDownloadUrl) {
+                console.log('Opening completed remote download:', app.lastRemoteDownloadUrl);
+                app.showModal('', app.lastRemoteDownloadFilename || '', false, '');
+                
+                // Show the download link immediately
+                app.handleMediaUrl(app.lastRemoteDownloadUrl, app.lastRemoteDownloadType);
+                app.updateProgress('🔗 Download ready from another device', 'success');
+                
+                // Clear the remote download data after use
+                app.lastRemoteDownloadUrl = null;
+                app.lastRemoteDownloadType = null;
+                app.lastRemoteDownloadFilename = null;
+                
+                return;
+            }
+            
+            // Fallback to active download
             if (app.activeDownloadUrl) {
-                console.log('Opening synced download:', app.activeDownloadUrl);
+                console.log('Opening active download:', app.activeDownloadUrl);
                 app.showModal(app.activeDownloadUrl, app.activeDownloadFilename || '', false, 'TAP');
                 
                 // Sync the modal with current progress
@@ -1716,7 +1743,7 @@
                     app.progressTitle.textContent = `Progress ${app.downloadProgressPercent}%`;
                 }
             } else {
-                console.error('No active download URL available');
+                console.error('No download available');
             }
         }
         

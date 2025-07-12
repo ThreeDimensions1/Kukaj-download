@@ -724,6 +724,9 @@ def start_download():
                     file_created = os.path.exists(os.path.join(DOWNLOADS_DIR, filename_only))
 
                 if file_created:
+                    # Create download URL for cross-device access
+                    download_url = f"/api/download-file/{filename_only}"
+                    
                     # Emit to specific session
                     socketio.emit('download_complete', {
                         'success': success,
@@ -731,12 +734,14 @@ def start_download():
                         'original_filename': output_filename
                     }, room=session_id)
                     
-                    # Also broadcast to all clients for sync
+                    # Also broadcast to all clients for sync with download URL
                     socketio.emit('download_complete_global', {
                         'success': success,
                         'filename': filename_only,
                         'original_filename': output_filename,
-                        'session_id': session_id
+                        'session_id': session_id,
+                        'download_url': download_url,
+                        'file_type': 'mp4' if filename_only.endswith('.mp4') else 'm3u8'
                     })
                 
                 # Also broadcast file list update to all clients

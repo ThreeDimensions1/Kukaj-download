@@ -16,6 +16,8 @@ import asyncio
 from pathlib import Path
 from playwright.async_api import async_playwright
 
+# removed dynamic legacy import – we now embed legacy TAP logic directly
+
 
 def normalize_kukaj_url(url):
     """
@@ -159,6 +161,77 @@ class KukajDownloader:
             print("💡 On ARM devices, ensure you have sufficient memory and swap space")
             raise
     
+    # ------------------------------------------------------------------
+    # LEGACY TAP EXTRACTION --------------------------------------------
+    # ------------------------------------------------------------------
+    def _tap_extract_legacy(self, url: str, found_urls: list[str]):
+        """Legacy, proven TAP extraction ported from previous version.
+        Mutates and returns found_urls list if successful.
+        """
+        try:
+            if self.page is None:
+                return found_urls
+            print("🕹️  Legacy TAP extractor engaged …")
+            # Ensure source menu
+            try:
+                self.page.wait_for_selector("div.subplayermenu", timeout=5000)
+            except Exception:
+                pass
+
+            # 1️⃣ Try to locate TAP button inside subplayermenu
+            btn_locator = self.page.locator("div.subplayermenu").get_by_text("TAP", exact=True)
+            if btn_locator.count() == 0:
+                btn_locator = self.page.get_by_text("TAP", exact=True)
+
+            if btn_locator.count() == 0:
+                print("⚠️  TAP button not found via text lookup – trying generic anchor …")
+                generic_anchor = self.page.locator("a:has-text('TAP')").first
+                if generic_anchor.count() > 0:
+                    href_raw = generic_anchor.get_attribute('href')
+                    if href_raw and href_raw not in ("#", "", "javascript:void(0)"):
+                        from urllib.parse import urljoin
+                        abs_href = urljoin(url, href_raw)
+                        print(f"↪️  Navigating to TAP href: {abs_href}")
+                        self.page.goto(abs_href, wait_until='domcontentloaded', timeout=30000)
+                        self.page.wait_for_timeout(4000)
+                else:
+                    print("❌ TAP anchor not found, legacy extractor failed early")
+                    return []
+            else:
+                href = btn_locator.first.get_attribute("href")
+                if href and href not in ("#", "", "javascript:void(0)"):
+                    from urllib.parse import urljoin
+                    next_url = urljoin(url, href)
+                    print(f"↪️  Navigating to TAP href: {next_url}")
+                    self.page.goto(next_url, wait_until='domcontentloaded', timeout=30000)
+                else:
+                    btn_locator.first.click(timeout=5000)
+
+            # Allow network idle then small passive wait
+            try:
+                self.page.wait_for_load_state('networkidle', timeout=10000)
+            except Exception:
+                pass
+            self.page.wait_for_timeout(4000)
+
+            # Immediate frame scan for Streamtape video elements
+            for frm in self.page.frames:
+                try:
+                    if any(dom in frm.url for dom in ["streamtape", "streamta.pe", "tapecontent"]):
+                        candidate = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
+                        if candidate and candidate.startswith('http') and candidate not in found_urls:
+                            found_urls.append(candidate)
+                            print(f"🎯 (Legacy) Found video URL: {candidate}")
+                except Exception:
+                    pass
+
+            # Passive wait if still nothing
+            return found_urls
+        except Exception as legacy_err:
+            print(f"⚠️ Legacy TAP extractor error: {legacy_err}")
+            return []
+
+
     # ------------------------------------------------------------------
     # MEDIA URL EXTRACTION (M3U8 + MP4) --------------------------------
     # ------------------------------------------------------------------
@@ -595,6 +668,10 @@ class KukajDownloader:
                     print(f"   {i}. {fu}")
             else:
                 print("❌ No media URLs found")
+
+            # If no URLs found and TAP requested, try built-in legacy routine once
+            if (not found_urls) and source and source.upper() == 'TAP':
+                self._tap_extract_legacy(url, found_urls)
 
         except Exception as e:
             print(f"❌ Error extracting media URLs: {e}")
