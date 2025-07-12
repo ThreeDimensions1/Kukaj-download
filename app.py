@@ -163,30 +163,62 @@ class WebDownloader(KukajDownloader):
             print(f"❌ Failed to emit progress: {e}")
     
     def close(self):
-        """Override close with better error handling"""
+        """Override close with better error handling and force cleanup"""
         try:
             self.emit_progress("🧹 Cleaning up browser resources...", "info")
             super().close()
         except Exception as e:
             print(f"❌ Error during cleanup: {e}")
-            # Force cleanup if needed
-            try:
-                import subprocess
-                import platform
-                if 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower():
-                    subprocess.run(['pkill', '-f', 'firefox'], stderr=subprocess.DEVNULL, timeout=5)
-            except:
-                pass
+        
+        # Force cleanup for ARM devices - always cleanup to prevent state pollution
+        try:
+            import subprocess
+            import platform
+            if 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower():
+                print("🔧 Force cleaning up Firefox processes on ARM device...")
+                subprocess.run(['pkill', '-f', 'firefox'], stderr=subprocess.DEVNULL, timeout=5)
+                # Also clean up any remaining playwright processes
+                subprocess.run(['pkill', '-f', 'playwright'], stderr=subprocess.DEVNULL, timeout=5)
+                # Give processes time to clean up
+                time.sleep(2)
+        except Exception as cleanup_err:
+            print(f"⚠️ Force cleanup failed: {cleanup_err}")
+    
+    def reinitialize_browser(self):
+        """Reinitialize browser to prevent state pollution"""
+        try:
+            self.emit_progress("🔄 Reinitializing browser for reliability...", "info")
+            # Close existing browser
+            self.close()
+            # Wait a moment for cleanup
+            time.sleep(1)
+            # Reinitialize
+            super().__init__(headless=True)
+            self.emit_progress("✅ Browser reinitialized successfully", "info")
+            return True
+        except Exception as e:
+            self.emit_progress(f"❌ Browser reinitialization failed: {str(e)}", "error")
+            return False
     
     def download_video(self, url, output_filename=None, convert_to_mp4=False, source=None):
         """Override to add progress updates"""
         max_retries = 2
         retry_count = 0
+        browser_reinitialized = False
         
         while retry_count <= max_retries:
             try:
                 if retry_count > 0:
                     self.emit_progress(f"🔄 Retry attempt {retry_count}/{max_retries}...", "warning")
+                    
+                    # Reinitialize browser on ARM devices for better reliability
+                    if retry_count == 1 and not browser_reinitialized:
+                        import platform
+                        if 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower():
+                            if self.reinitialize_browser():
+                                browser_reinitialized = True
+                            else:
+                                self.emit_progress("⚠️ Browser reinitialization failed, continuing with existing browser", "warning")
                 
                 self.emit_progress("🔄 Starting download process...", "info")
                 
@@ -281,10 +313,17 @@ class WebDownloader(KukajDownloader):
                     self.emit_progress(f"🎉 Download completed: {output_filename}", "success")
                     # Notify front-end with link to the newly stored mp4 so other devices can grab it
                     file_link = f"/api/download-file/{os.path.basename(output_filename)}"
+                    # Send to specific session
                     socketio.emit('media_url', {
                         'url': file_link,
                         'type': 'mp4'
                     }, room=self.session_id)
+                    # Also broadcast to all clients for sync
+                    socketio.emit('media_url_global', {
+                        'url': file_link,
+                        'type': 'mp4',
+                        'session_id': self.session_id
+                    })
                 else:
                     self.emit_progress("❌ Download failed", "error")
                 return success
@@ -292,10 +331,17 @@ class WebDownloader(KukajDownloader):
                 # LINK-ONLY MODE – send URL to front-end
                 lower_url = media_url.lower()
                 file_type = 'mp4' if ('.mp4' in lower_url or 'streamtape.com' in lower_url or 'tapecontent' in lower_url) else 'm3u8'
+                # Send to specific session
                 socketio.emit('media_url', {
                     'url': media_url,
                     'type': file_type
                 }, room=self.session_id)
+                # Also broadcast to all clients for sync
+                socketio.emit('media_url_global', {
+                    'url': media_url,
+                    'type': file_type,
+                    'session_id': self.session_id
+                })
 
                 self.emit_progress("🔗 Download link ready", "success")
                 return True
