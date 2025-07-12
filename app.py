@@ -10,7 +10,8 @@ import time
 import atexit
 import shutil
 from flask import Flask, render_template, request, jsonify, send_file, after_this_request
-from flask_socketio import SocketIO, emit, join_room
+# Fix Socket.IO imports to ensure room parameter is recognized
+from flask_socketio import SocketIO, emit, join_room, leave_room, rooms, disconnect
 from kukaj_downloader import KukajDownloader, normalize_kukaj_url
 from datetime import datetime
 import json
@@ -18,7 +19,12 @@ import re
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kukaj_downloader_secret_key'
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Improve Socket.IO configuration for better cross-device sync
+socketio = SocketIO(app, 
+                   cors_allowed_origins="*", 
+                   ping_timeout=60,
+                   ping_interval=25,
+                   async_mode='threading')
 
 # Download directory
 DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'downloads')
@@ -726,6 +732,7 @@ def start_download():
                 if file_created:
                     # Create download URL for cross-device access
                     download_url = f"/api/download-file/{filename_only}"
+                    file_type = 'mp4' if filename_only.endswith('.mp4') else 'm3u8'
                     
                     # Emit to specific session
                     socketio.emit('download_complete', {
@@ -741,7 +748,7 @@ def start_download():
                         'original_filename': output_filename,
                         'session_id': session_id,
                         'download_url': download_url,
-                        'file_type': 'mp4' if filename_only.endswith('.mp4') else 'm3u8'
+                        'file_type': file_type
                     })
                 
                 # Also broadcast file list update to all clients

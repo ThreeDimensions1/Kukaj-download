@@ -827,7 +827,16 @@
     <script>
         class KukajDownloader {
             constructor() {
-                this.socket = io();
+                // Improved Socket.IO configuration for better cross-device sync
+                this.socket = io({
+                    reconnection: true,
+                    reconnectionAttempts: 10,
+                    reconnectionDelay: 1000,
+                    reconnectionDelayMax: 5000,
+                    timeout: 60000,
+                    autoConnect: true,
+                    transports: ['websocket', 'polling']
+                });
                 this.sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
                 this.isDownloading = false;
                 this.downloadHistory = [];
@@ -858,6 +867,19 @@
                 this.loadHistory();
                 this.checkDownloadStatus();
                 this.initializeMiniStatusPanel();
+                
+                // Request notification permission
+                this.requestNotificationPermission();
+            }
+            
+            requestNotificationPermission() {
+                if ('Notification' in window) {
+                    if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+                        Notification.requestPermission().then(permission => {
+                            console.log('Notification permission:', permission);
+                        });
+                    }
+                }
             }
             
             setupEventListeners() {
@@ -867,10 +889,43 @@
                 this.socket.on('connect', () => {
                     this.socket.emit('join_session', { session_id: this.sessionId });
                     this.updateConnectionStatus();
+                    console.log('Socket connected successfully, session ID:', this.sessionId);
+                    
+                    // Immediately check download status on connect/reconnect
+                    this.checkDownloadStatus();
                 });
                 
                 this.socket.on('disconnect', () => {
                     this.updateConnectionStatus();
+                    console.log('Socket disconnected');
+                });
+                
+                // Add explicit reconnection event handlers
+                this.socket.on('reconnect', (attemptNumber) => {
+                    console.log(`Socket reconnected after ${attemptNumber} attempts`);
+                    this.updateConnectionStatus();
+                    // Re-join session room and refresh state
+                    this.socket.emit('join_session', { session_id: this.sessionId });
+                    this.checkDownloadStatus();
+                });
+                
+                this.socket.on('reconnect_attempt', (attemptNumber) => {
+                    console.log(`Socket reconnection attempt ${attemptNumber}`);
+                    this.updateConnectionStatus();
+                });
+                
+                this.socket.on('reconnect_error', (error) => {
+                    console.error('Socket reconnection error:', error);
+                    this.updateConnectionStatus();
+                });
+                
+                this.socket.on('reconnect_failed', () => {
+                    console.error('Socket reconnection failed');
+                    this.updateConnectionStatus();
+                    // Try to manually reconnect after a delay
+                    setTimeout(() => {
+                        this.socket.connect();
+                    }, 5000);
                 });
                 
                 this.socket.on('download_progress', (data) => {
@@ -981,12 +1036,33 @@
                 // Handle global media_url events for sync between devices
                 this.socket.on('media_url_global', (payload) => {
                     const { url, type, session_id } = payload;
+                    console.log('Received media_url_global event:', payload);
+                    
                     // Only handle if this is from another session (not our own)
                     if (session_id !== this.sessionId) {
-                        this.handleMediaUrl(url, type);
-                        // Also update the modal if it's open
+                        console.log('Processing remote media URL from session:', session_id);
+                        
+                        // Store the download link for later access
+                        this.lastRemoteDownloadUrl = url;
+                        this.lastRemoteDownloadType = type;
+                        
+                        // Show notification in mini panel
+                        this.downloadProgress = '✅ Download ready from another device!';
+                        this.downloadProgressPercent = 100;
+                        this.updateMiniStatusPanel();
+                        
+                        // Handle the media URL if the modal is open
                         if (this.modal && !this.modal.classList.contains('hidden')) {
+                            this.handleMediaUrl(url, type);
                             this.updateProgress('🔗 Download link ready (from another device)', 'success');
+                        }
+                        
+                        // Show a browser notification if supported
+                        if ('Notification' in window && Notification.permission === 'granted') {
+                            new Notification('Download Ready', {
+                                body: 'A download is ready from another device',
+                                icon: '/favicon.ico'
+                            });
                         }
                     }
                 });
@@ -1124,13 +1200,24 @@
                         miniDownloadActions.style.display = 'block';
                         
                         console.log('Mini panel shown for remote download:', this.activeDownloadSession);
-                    } else if (!this.globalDownloadActive && (this.miniPanelHideTimeout || this.lastRemoteDownloadUrl)) {
-                        // Download finished - keep showing for 5 seconds with download button
+                    } else if (this.lastRemoteDownloadUrl) {
+                        // Remote download completed and link is available
                         panel.classList.remove('hidden');
                         this.miniStatusVisible = true;
                         
                         downloadIcon.className = 'mini-status-icon active';
-                        downloadText.textContent = this.lastRemoteDownloadUrl ? 'Download ready from another device!' : 'Download completed!';
+                        downloadText.textContent = 'Download ready from another device!';
+                        miniStatusTitle.textContent = 'Download Ready';
+                        miniDownloadActions.style.display = 'block';
+                        
+                        console.log('Mini panel showing remote download link available');
+                    } else if (!this.globalDownloadActive && this.miniPanelHideTimeout) {
+                        // Local download just finished - keep showing for 5 seconds with download button
+                        panel.classList.remove('hidden');
+                        this.miniStatusVisible = true;
+                        
+                        downloadIcon.className = 'mini-status-icon active';
+                        downloadText.textContent = 'Download completed!';
                         miniStatusTitle.textContent = 'Download Ready';
                         miniDownloadActions.style.display = 'block';
                         
@@ -1393,9 +1480,15 @@
             }
             
             handleMediaUrl(url, type) {
+                console.log('Handling media URL:', url, type);
                 const mp4Btn = document.getElementById('downloadMp4Btn');
                 const m3u8Btn = document.getElementById('downloadM3u8Btn');
-
+                
+                // Store this URL for later access from other devices
+                this.lastRemoteDownloadUrl = url;
+                this.lastRemoteDownloadType = type;
+                
+                // Show the appropriate download button
                 if (type === 'mp4') {
                     mp4Btn.href = url;
                     mp4Btn.style.display = 'inline-flex';
@@ -1435,6 +1528,9 @@
                         videoPreview.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#fff;background:#1a1a1a;border-radius:8px;">Preview not supported</div>';
                     }
                 }
+                
+                // Update mini panel to show download is ready
+                this.updateMiniStatusPanel();
             }
             
             downloadFile(filename) {
@@ -1712,24 +1808,36 @@
         
         // Global function to open synced download
         function openSyncedDownload() {
+            console.log('Opening synced download...');
+            
             // Check if there's a completed remote download
             if (app.lastRemoteDownloadUrl) {
                 console.log('Opening completed remote download:', app.lastRemoteDownloadUrl);
-                app.showModal('', app.lastRemoteDownloadFilename || '', false, '');
+                
+                // Show modal with empty URL (will be filled by handleMediaUrl)
+                app.showModal('', '', false, '');
                 
                 // Show the download link immediately
                 app.handleMediaUrl(app.lastRemoteDownloadUrl, app.lastRemoteDownloadType);
                 app.updateProgress('🔗 Download ready from another device', 'success');
                 
-                // Clear the remote download data after use
-                app.lastRemoteDownloadUrl = null;
-                app.lastRemoteDownloadType = null;
-                app.lastRemoteDownloadFilename = null;
+                // Clear the remote download data to prevent stale data
+                const tempUrl = app.lastRemoteDownloadUrl;
+                const tempType = app.lastRemoteDownloadType;
+                
+                // Clear after a short delay to allow handleMediaUrl to complete
+                setTimeout(() => {
+                    if (app.lastRemoteDownloadUrl === tempUrl) {
+                        app.lastRemoteDownloadUrl = null;
+                        app.lastRemoteDownloadType = null;
+                        app.updateMiniStatusPanel();
+                    }
+                }, 500);
                 
                 return;
             }
             
-            // Fallback to active download
+            // Check if there's an active download
             if (app.activeDownloadUrl) {
                 console.log('Opening active download:', app.activeDownloadUrl);
                 app.showModal(app.activeDownloadUrl, app.activeDownloadFilename || '', false, 'TAP');
@@ -1742,9 +1850,10 @@
                     app.progressFill.style.width = `${app.downloadProgressPercent}%`;
                     app.progressTitle.textContent = `Progress ${app.downloadProgressPercent}%`;
                 }
-            } else {
-                console.error('No download available');
+                return;
             }
+            
+            console.error('No active or completed download available');
         }
         
         // Close modals when clicking outside
