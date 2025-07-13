@@ -220,8 +220,10 @@ class KukajDownloader:
                     if any(dom in frm.url for dom in ["streamtape", "streamta.pe", "tapecontent"]):
                         candidate = frm.evaluate("() => (document.querySelector('video') && document.querySelector('video').src) || null")
                         if candidate and candidate.startswith('http') and candidate not in found_urls:
-                            found_urls.append(candidate)
-                            print(f"🎯 (Legacy) Found video URL: {candidate}")
+                            # STRICT FILTERING: Only accept URLs from streamtape domains
+                            if any(dom in candidate.lower() for dom in ["streamtape", "streamta.pe", "tapecontent"]):
+                                found_urls.append(candidate)
+                                print(f"🎯 (Legacy) Found video URL: {candidate}")
                 except Exception:
                     pass
 
@@ -263,19 +265,18 @@ class KukajDownloader:
                 print("🔄 Using legacy TAP extractor directly")
                 self._tap_extract_legacy(url, found_urls)
                 
-                # Filter URLs to include only legitimate video sources (exclude ads)
+                # STRICT FILTERING: Only accept URLs from streamtape domains
                 if found_urls:
                     filtered_urls = []
                     for u in found_urls:
-                        # Only keep URLs from known video hosts
-                        if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe', '.mp4', '.m3u8']):
+                        if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe']):
                             filtered_urls.append(u)
                     
                     if filtered_urls:
-                        print(f"🎯 Filtered {len(found_urls)} URLs to {len(filtered_urls)} legitimate video sources")
+                        print(f"🎯 Filtered {len(found_urls)} URLs to {len(filtered_urls)} legitimate Streamtape sources")
                         found_urls = filtered_urls
                     else:
-                        print("⚠️ All found URLs were filtered out as potential ads")
+                        print("⚠️ All found URLs were filtered out as non-Streamtape")
                 
                 # If we found valid URLs, return them immediately
                 if found_urls:
@@ -284,7 +285,75 @@ class KukajDownloader:
                         print(f"   {i}. {fu}")
                     return found_urls
             
-            # For non-TAP sources or if TAP legacy extractor found nothing, continue with normal flow
+            # For MON sources, try URL-based selection first to catch early m3u8 requests
+            if source and source.upper() == 'MON':
+                print("🔄 Using URL-based MON selection first to catch early m3u8 requests")
+                
+                # -----------------------------------------------------------
+                # Network sniffers – set up BEFORE navigation
+                # -----------------------------------------------------------
+                print("🔄 Setting up network sniffers for MON…")
+                ctx = self.page.context
+
+                def _sniff(route_or_resp):
+                    u = route_or_resp.url.lower()
+                    # Filter URLs to include only legitimate video sources
+                    if (".m3u8" in u) and (u not in found_urls):
+                        found_urls.append(route_or_resp.url)
+                        print(f"🎯 Found MON m3u8 URL: {route_or_resp.url}")
+
+                ctx.on('request', _sniff)
+                ctx.on('response', _sniff)
+                
+                # Try to construct a direct MON URL first
+                try:
+                    # Parse the original URL
+                    from urllib.parse import urlparse, urljoin
+                    parsed_url = urlparse(url)
+                    path_parts = parsed_url.path.strip('/').split('/')
+                    
+                    # Attempt to construct a MON URL
+                    if len(path_parts) >= 1:
+                        # For film URLs like /matrix
+                        if len(path_parts) == 1:
+                            mon_url = urljoin(url, f"{path_parts[0]}/1")
+                        # For series URLs like /series-name/S01E01
+                        elif len(path_parts) >= 2:
+                            mon_url = urljoin(url, f"{path_parts[0]}/{path_parts[1]}/1")
+                        else:
+                            mon_url = urljoin(url, "1")
+                            
+                        print(f"🌐 Trying direct MON URL: {mon_url}")
+                        response = self.page.goto(mon_url, wait_until='domcontentloaded', timeout=30000)
+                        print(f"📍 MON URL status: {response.status if response else 'unknown'}")
+                        
+                        # Wait for network activity to catch m3u8 requests
+                        try:
+                            self.page.wait_for_load_state('networkidle', timeout=10000)
+                        except:
+                            pass
+                        
+                        # Passive wait to catch any delayed requests
+                        self.page.wait_for_timeout(5000)
+                        
+                        # If we found URLs, return them
+                        if found_urls:
+                            print(f"🎉 Found {len(found_urls)} media URL(s) via direct MON URL")
+                            for i, fu in enumerate(found_urls, 1):
+                                print(f"   {i}. {fu}")
+                            return found_urls
+                    
+                    # If direct URL didn't work, fall back to regular flow
+                    print("⚠️ Direct MON URL didn't yield results, falling back to regular flow")
+                    
+                    # Go back to original URL for regular flow
+                    self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                except Exception as mon_err:
+                    print(f"⚠️ MON direct URL error: {mon_err}")
+                    # Go back to original URL for regular flow
+                    self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            
+            # For non-TAP sources or if TAP/MON direct methods failed, continue with normal flow
             # -----------------------------------------------------------
             # Network sniffers – watch every request AND response in page
             # -----------------------------------------------------------
@@ -295,23 +364,33 @@ class KukajDownloader:
                 u = route_or_resp.url.lower()
                 # Filter URLs to include only legitimate video sources (exclude ads)
                 if (".m3u8" in u or ".mp4" in u) and (u not in found_urls):
-                    # Only add URLs from known video hosts or with video extensions
-                    if any(host in u for host in ['streamtape', 'tapecontent', 'streamta.pe']) or u.endswith('.mp4') or u.endswith('.m3u8'):
+                    # For TAP source, only accept streamtape domains
+                    if source and source.upper() == 'TAP':
+                        if any(host in u for host in ['streamtape', 'tapecontent', 'streamta.pe']):
+                            found_urls.append(route_or_resp.url)
+                            print(f"🎯 Found TAP media URL: {route_or_resp.url}")
+                    # For MON or other sources, accept m3u8 files
+                    elif ".m3u8" in u:
                         found_urls.append(route_or_resp.url)
-                        print(f"🎯 Found media URL: {route_or_resp.url}")
+                        print(f"🎯 Found m3u8 URL: {route_or_resp.url}")
+                    # For any source, accept mp4 from known hosts
+                    elif ".mp4" in u and any(host in u for host in ['streamtape', 'tapecontent', 'streamta.pe']):
+                        found_urls.append(route_or_resp.url)
+                        print(f"🎯 Found mp4 URL: {route_or_resp.url}")
 
             ctx.on('request', _sniff)
             ctx.on('response', _sniff)
 
             # -----------------------------------------------------------
-            # Navigate to main page
+            # Navigate to main page if not already there
             # -----------------------------------------------------------
-            print(f"🌐 GOTO  {url}")
-            response = self.page.goto(url, wait_until='domcontentloaded', timeout=60000)
-            print(f"📍 Page status: {response.status if response else 'unknown'}")
+            if self.page.url != url:
+                print(f"🌐 GOTO  {url}")
+                response = self.page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                print(f"📍 Page status: {response.status if response else 'unknown'}")
 
-            if response and response.status >= 400:
-                print(f"⚠️ Page returned status {response.status}")
+                if response and response.status >= 400:
+                    print(f"⚠️ Page returned status {response.status}")
 
             # Optionally click desired source button (MON/TAP/MIX …)
             if source:
@@ -473,8 +552,15 @@ class KukajDownloader:
             if found_urls:
                 filtered_urls = []
                 for u in found_urls:
-                    # Only keep URLs from known video hosts or with video extensions
-                    if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe']) or u.lower().endswith('.mp4') or u.lower().endswith('.m3u8'):
+                    # For TAP source, only accept streamtape domains
+                    if source and source.upper() == 'TAP':
+                        if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe']):
+                            filtered_urls.append(u)
+                    # For MON or other sources, accept m3u8 files
+                    elif ".m3u8" in u.lower():
+                        filtered_urls.append(u)
+                    # For any source, accept mp4 from known hosts
+                    elif ".mp4" in u.lower() and any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe']):
                         filtered_urls.append(u)
                 
                 if len(filtered_urls) < len(found_urls):
@@ -493,18 +579,18 @@ class KukajDownloader:
                     print("🔄 Trying legacy TAP extractor as last resort")
                     self._tap_extract_legacy(url, found_urls)
                     
-                    # Filter URLs again
+                    # Filter URLs again - STRICT for TAP
                     if found_urls:
                         filtered_urls = []
                         for u in found_urls:
-                            if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe']) or u.lower().endswith('.mp4') or u.lower().endswith('.m3u8'):
+                            if any(host in u.lower() for host in ['streamtape', 'tapecontent', 'streamta.pe']):
                                 filtered_urls.append(u)
                         
                         if filtered_urls:
-                            print(f"🎯 Filtered {len(found_urls)} URLs to {len(filtered_urls)} legitimate video sources")
+                            print(f"🎯 Filtered {len(found_urls)} URLs to {len(filtered_urls)} legitimate Streamtape sources")
                             found_urls = filtered_urls
                         else:
-                            print("⚠️ All found URLs were filtered out as potential ads")
+                            print("⚠️ All found URLs were filtered out as non-Streamtape")
                     
                     if found_urls:
                         print(f"🎉 Found {len(found_urls)} media URL(s) with legacy extractor")
