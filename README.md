@@ -178,3 +178,49 @@ This will show the browser window so you can see what's happening.
 ## Legal Notice
 
 This tool is for educational purposes only. Make sure you have permission to download content and respect the website's terms of service and copyright laws. 
+
+## ARM / Banana Pi M5 Quick-Start (Armbian Bookworm Minimal)
+
+Running on a low-power ARM SBC requires just a few one-time steps – no Selenium or ChromeDriver is needed any more (we switched to Playwright).
+
+```bash
+# 1 – system packages
+sudo apt update && sudo apt install -y python3-venv ffmpeg git curl jq
+
+# 2 – python virtual-env inside the project folder
+python3 -m venv venv && . venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 3 – install Playwright browsers & deps (headless-friendly)
+playwright install --with-deps
+
+# 4 – (optional but recommended) create 2 GB swap if you have <2 GB free RAM
+sudo fallocate -l 2G /swap && sudo mkswap /swap && sudo swapon /swap
+```
+
+Test it:
+
+```bash
+python kukaj_downloader.py "https://film.kukaj.fi/matrix" --headless
+```
+
+You should see:
+
+```
+🎭 Setting up Playwright…
+✅ Playwright setup complete using Firefox (ARM-optimized)
+…
+🎉 Found 1 media URL(s)
+…
+✅ Download completed: downloads/matrix.mp4
+```
+
+If Firefox fails on your build, the script automatically falls back to Chromium and prints a notice.
+
+### Troubleshooting on ARM
+* **Browser install fails** – run `playwright install chromium` and retry.
+* **Out-of-memory / crashes** – enable swap (see above) or run with `--headless`.
+* **Still no video URL** – extend the passive wait time: `KukajDownloader(wait_sec=15)`.
+
+--- 

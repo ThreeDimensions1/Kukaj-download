@@ -72,7 +72,8 @@ class KukajDownloader:
         self.headless = headless
         # Reduce wait time for ARM devices to avoid timeouts
         import platform
-        if 'arm' in platform.machine().lower() or 'aarch64' in platform.machine().lower():
+        platform_machine = platform.machine().lower()
+        if 'arm' in platform_machine or 'aarch64' in platform_machine:
             self.wait_sec = min(wait_sec, 8)  # Max 8 seconds for ARM
             print(f"🔧 ARM device detected, reducing wait time to {self.wait_sec}s")
         else:
@@ -95,13 +96,13 @@ class KukajDownloader:
             
             # ARM-optimized Firefox settings for Banana Pi M5
             firefox_prefs = {
-                'network.proxy.type': 0,  # No proxy
-                'network.proxy.no_proxies_on': 'localhost, 127.0.0.1',
-                'network.http.use-cache': False,
-                'media.volume_scale': '0.0',  # Mute audio
-                'dom.webdriver.enabled': False,
-                'useAutomationExtension': False,
-                'network.trr.mode': 5,
+                    'network.proxy.type': 0,  # No proxy
+                    'network.proxy.no_proxies_on': 'localhost, 127.0.0.1',
+                    'network.http.use-cache': False,
+                    'media.volume_scale': '0.0',  # Mute audio
+                    'dom.webdriver.enabled': False,
+                    'useAutomationExtension': False,
+                    'network.trr.mode': 5,
                 # ARM optimizations
                 'gfx.canvas.azure.backends': 'cairo',  # Use software rendering
                 'layers.acceleration.disabled': True,  # Disable hardware acceleration
@@ -112,23 +113,45 @@ class KukajDownloader:
                 'browser.cache.memory.enable': False,  # Disable memory cache
             }
             
-            # Launch Firefox browser with ARM-optimized settings
-            self.browser = self.playwright.firefox.launch(
-                headless=self.headless,
-                firefox_user_prefs=firefox_prefs,
+            # Try to launch Firefox first – if it fails (common on some ARM builds),
+            # automatically fall back to Chromium so the downloader still works.
+            try:
+                # Launch Firefox browser with ARM-optimized settings
+                self.browser = self.playwright.firefox.launch(
+                    headless=self.headless,
+                    firefox_user_prefs=firefox_prefs,
                 args=[
-                    '--width=1280',  # Reduced resolution for ARM
-                    '--height=720',
+                        '--width=1280',  # Reduced resolution for ARM
+                        '--height=720',
                     '--no-remote',
-                    '--disable-extensions',
-                    '--disable-dev-shm-usage',  # Avoid shared memory issues
-                    '--no-sandbox',  # Avoid sandbox issues on ARM
-                ]
-            )
+                        '--disable-extensions',
+                        '--disable-dev-shm-usage',  # Avoid shared memory issues
+                        '--no-sandbox',  # Avoid sandbox issues on ARM
+                    ]
+                )
+                browser_engine = 'Firefox'
+            except Exception as firefox_err:
+                print(f"⚠️  Firefox launch failed on this platform: {firefox_err}\n   ➡️  Falling back to Chromium …")
+                self.browser = self.playwright.chromium.launch(
+                    headless=self.headless,
+                    args=[
+                        '--disable-gpu',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                        '--disable-extensions',
+                        '--window-size=1280,720',
+                    ]
+                )
+                browser_engine = 'Chromium'
             
-            # Create browser context with ARM-optimized settings
+            # Create browser context with ARM-optimized settings – UA differs per engine for realism
+            ua_default = {
+                'Firefox': 'Mozilla/5.0 (X11; Linux armv7l; rv:120.0) Gecko/20100101 Firefox/120.0',
+                'Chromium': 'Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            }[browser_engine]
+
             context = self.browser.new_context(
-                user_agent='Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                user_agent=ua_default,
                 viewport={'width': 1280, 'height': 720},  # Reduced viewport
                 ignore_https_errors=True,
                 java_script_enabled=True,
@@ -145,7 +168,7 @@ class KukajDownloader:
             
             # Store context for later
             self.context = context
-
+            
             # Create page
             self.page = context.new_page()
             
@@ -153,7 +176,7 @@ class KukajDownloader:
             self.page.set_default_timeout(30000)  # 30 seconds
             self.page.set_default_navigation_timeout(30000)  # 30 seconds
             
-            print("✅ Playwright setup complete (ARM-optimized)")
+            print(f"✅ Playwright setup complete using {browser_engine} (ARM-optimized)")
             
         except Exception as e:
             print(f"❌ Failed to initialize Playwright: {e}")
@@ -233,6 +256,60 @@ class KukajDownloader:
             print(f"⚠️ Legacy TAP extractor error: {legacy_err}")
             return []
 
+    # ------------------------------------------------------------------
+    # LEGACY MON EXTRACTION -------------------------------------------
+    # ------------------------------------------------------------------
+    def _mon_extract_legacy(self, url: str, found_urls: list[str]):
+        """Simplified legacy MON extractor – mirrors behaviour from kukaj_downloader_old.py but scoped to MON."""
+        try:
+            if self.page is None:
+                return found_urls
+
+            print("🕹️  Legacy MON extractor engaged …")
+
+            # Store listeners to remove them later
+            listeners = []
+
+            def _sniff(route_or_resp):
+                u = route_or_resp.url.lower()
+                if ".m3u8" in u and u not in found_urls:
+                    found_urls.append(route_or_resp.url)
+                    print(f"🎯 (Legacy MON) Found m3u8 URL: {route_or_resp.url}")
+
+            # Add listeners and track them
+            ctx = self.page.context
+            ctx.on("request", _sniff)
+            ctx.on("response", _sniff)
+            listeners.append(("request", _sniff))
+            listeners.append(("response", _sniff))
+
+            # Navigate if not there
+            if self.page.url != url:
+                self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
+
+            # Click MON button if present
+            try:
+                self.page.wait_for_selector("div.subplayermenu", timeout=5000)
+                btn = self.page.locator("div.subplayermenu").get_by_text("MON", exact=True)
+                if btn.count() == 0:
+                    btn = self.page.get_by_text("MON", exact=True)
+                if btn.count() > 0:
+                    btn.first.click(timeout=5000)
+            except Exception:
+                pass
+
+            # Passive wait longer (15 s) – Filemoon is slower to load
+            self.page.wait_for_timeout(15000)
+
+            # Remove listeners to avoid duplicates
+            for event_type, listener in listeners:
+                ctx.remove_listener(event_type, listener)
+
+            return found_urls
+        except Exception as e:
+            print(f"⚠️ Legacy MON extractor error: {e}")
+            return found_urls
+
 
     # ------------------------------------------------------------------
     # MEDIA URL EXTRACTION (M3U8 + MP4) --------------------------------
@@ -252,13 +329,17 @@ class KukajDownloader:
         """
 
         print(f"🔍 Loading page: {url}")
-
+        
         if not self.page:
             print("❌ Page not initialized")
             return []
-
+            
         found_urls: list[str] = []
-
+        # Track all listeners to clean them up later
+        all_listeners = []
+        # Flag to indicate if we should stop extraction
+        should_stop_extraction = False
+        
         try:
             # For TAP source, use only the legacy extractor which is proven to work
             if source and source.upper() == 'TAP':
@@ -295,15 +376,33 @@ class KukajDownloader:
                 print("🔄 Setting up network sniffers for MON…")
                 ctx = self.page.context
 
-                def _sniff(route_or_resp):
-                    u = route_or_resp.url.lower()
+                def _sniff_mon_request(route):
+                    nonlocal should_stop_extraction
+                    u = route.url.lower()
                     # Filter URLs to include only legitimate video sources
                     if (".m3u8" in u) and (u not in found_urls):
-                        found_urls.append(route_or_resp.url)
-                        print(f"🎯 Found MON m3u8 URL: {route_or_resp.url}")
+                        found_urls.append(route.url)
+                        print(f"🎯 Found MON m3u8 URL: {route.url}")
+                        # Mark for early return but don't actually return
+                        if len(found_urls) >= 1:
+                            should_stop_extraction = True
 
-                ctx.on('request', _sniff)
-                ctx.on('response', _sniff)
+                def _sniff_mon_response(response):
+                    nonlocal should_stop_extraction
+                    u = response.url.lower()
+                    # Filter URLs to include only legitimate video sources
+                    if (".m3u8" in u) and (u not in found_urls):
+                        found_urls.append(response.url)
+                        print(f"🎯 Found MON m3u8 URL: {response.url}")
+                        # Mark for early return but don't actually return
+                        if len(found_urls) >= 1:
+                            should_stop_extraction = True
+
+                # Register listeners and track them
+                ctx.on('request', _sniff_mon_request)
+                ctx.on('response', _sniff_mon_response)
+                all_listeners.append(('request', _sniff_mon_request))
+                all_listeners.append(('response', _sniff_mon_response))
                 
                 # Try to construct a direct MON URL first
                 try:
@@ -336,11 +435,15 @@ class KukajDownloader:
                         # Passive wait to catch any delayed requests
                         self.page.wait_for_timeout(5000)
                         
-                        # If we found URLs, return them
-                        if found_urls:
+                        # If we found URLs, clean up listeners and return them
+                        if found_urls or should_stop_extraction:
                             print(f"🎉 Found {len(found_urls)} media URL(s) via direct MON URL")
                             for i, fu in enumerate(found_urls, 1):
                                 print(f"   {i}. {fu}")
+                            
+                            # Clean up listeners before returning
+                            for event_type, listener in all_listeners:
+                                ctx.remove_listener(event_type, listener)
                             return found_urls
                     
                     # If direct URL didn't work, fall back to regular flow
@@ -352,6 +455,19 @@ class KukajDownloader:
                     print(f"⚠️ MON direct URL error: {mon_err}")
                     # Go back to original URL for regular flow
                     self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                
+                # Clean up listeners before continuing to avoid duplicates
+                for event_type, listener in all_listeners:
+                    ctx.remove_listener(event_type, listener)
+                all_listeners = []
+                should_stop_extraction = False  # Reset flag
+
+            # --- If MON still not found after regular flow, fallback to legacy ---
+            if source and source.upper() == 'MON' and not found_urls:
+                print("🔄 Falling back to legacy MON extractor")
+                self._mon_extract_legacy(url, found_urls)
+                if found_urls:
+                    return list(dict.fromkeys(found_urls))
             
             # For non-TAP sources or if TAP/MON direct methods failed, continue with normal flow
             # -----------------------------------------------------------
@@ -360,38 +476,59 @@ class KukajDownloader:
             print("🔄 Setting up network sniffers …")
             ctx = self.page.context
 
-            def _sniff(route_or_resp):
-                u = route_or_resp.url.lower()
+            def _sniff_request(route):
+                u = route.url.lower()
                 # Filter URLs to include only legitimate video sources (exclude ads)
                 if (".m3u8" in u or ".mp4" in u) and (u not in found_urls):
                     # For TAP source, only accept streamtape domains
                     if source and source.upper() == 'TAP':
                         if any(host in u for host in ['streamtape', 'tapecontent', 'streamta.pe']):
-                            found_urls.append(route_or_resp.url)
-                            print(f"🎯 Found TAP media URL: {route_or_resp.url}")
+                            found_urls.append(route.url)
+                            print(f"🎯 Found TAP media URL: {route.url}")
                     # For MON or other sources, accept m3u8 files
                     elif ".m3u8" in u:
-                        found_urls.append(route_or_resp.url)
-                        print(f"🎯 Found m3u8 URL: {route_or_resp.url}")
+                        found_urls.append(route.url)
+                        print(f"🎯 Found m3u8 URL: {route.url}")
                     # For any source, accept mp4 from known hosts
                     elif ".mp4" in u and any(host in u for host in ['streamtape', 'tapecontent', 'streamta.pe']):
-                        found_urls.append(route_or_resp.url)
-                        print(f"🎯 Found mp4 URL: {route_or_resp.url}")
+                        found_urls.append(route.url)
+                        print(f"🎯 Found mp4 URL: {route.url}")
 
-            ctx.on('request', _sniff)
-            ctx.on('response', _sniff)
+            def _sniff_response(response):
+                u = response.url.lower()
+                # Filter URLs to include only legitimate video sources (exclude ads)
+                if (".m3u8" in u or ".mp4" in u) and (u not in found_urls):
+                    # For TAP source, only accept streamtape domains
+                    if source and source.upper() == 'TAP':
+                        if any(host in u for host in ['streamtape', 'tapecontent', 'streamta.pe']):
+                            found_urls.append(response.url)
+                            print(f"🎯 Found TAP media URL: {response.url}")
+                    # For MON or other sources, accept m3u8 files
+                    elif ".m3u8" in u:
+                        found_urls.append(response.url)
+                        print(f"🎯 Found m3u8 URL: {response.url}")
+                    # For any source, accept mp4 from known hosts
+                    elif ".mp4" in u and any(host in u for host in ['streamtape', 'tapecontent', 'streamta.pe']):
+                        found_urls.append(response.url)
+                        print(f"🎯 Found mp4 URL: {response.url}")
+
+            # Register listeners and track them
+            ctx.on('request', _sniff_request)
+            ctx.on('response', _sniff_response)
+            all_listeners.append(('request', _sniff_request))
+            all_listeners.append(('response', _sniff_response))
 
             # -----------------------------------------------------------
             # Navigate to main page if not already there
             # -----------------------------------------------------------
             if self.page.url != url:
                 print(f"🌐 GOTO  {url}")
-                response = self.page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                print(f"📍 Page status: {response.status if response else 'unknown'}")
-
-                if response and response.status >= 400:
-                    print(f"⚠️ Page returned status {response.status}")
-
+            response = self.page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            print(f"📍 Page status: {response.status if response else 'unknown'}")
+            
+            if response and response.status >= 400:
+                print(f"⚠️ Page returned status {response.status}")
+            
             # Optionally click desired source button (MON/TAP/MIX …)
             if source:
                 source_activated = False
@@ -545,6 +682,11 @@ class KukajDownloader:
             else:
                 print("⚡ Skipping passive wait – URL already captured")
 
+            # Clean up all listeners to avoid duplicates
+            for event_type, listener in all_listeners:
+                ctx.remove_listener(event_type, listener)
+            all_listeners = []
+
             # Deduplicate
             found_urls = list(dict.fromkeys(found_urls))
 
@@ -596,10 +738,18 @@ class KukajDownloader:
                         print(f"🎉 Found {len(found_urls)} media URL(s) with legacy extractor")
                         for i, fu in enumerate(found_urls, 1):
                             print(f"   {i}. {fu}")
-
+                
         except Exception as e:
             print(f"❌ Error extracting media URLs: {e}")
-
+            # Clean up any remaining listeners
+            if all_listeners:
+                ctx = self.page.context
+                for event_type, listener in all_listeners:
+                    try:
+                        ctx.remove_listener(event_type, listener)
+                    except:
+                        pass
+        
         return found_urls
 
     # Backwards compatibility -------------------------------------------------
@@ -610,7 +760,7 @@ class KukajDownloader:
     # ------------------------------------------------------------------
     # DOWNLOAD HELPERS (MP4 & M3U8)
     # ------------------------------------------------------------------
-
+    
     def download_with_ffmpeg(self, m3u8_url, output_filename):
         """Download m3u8 using FFmpeg"""
         try:
@@ -812,11 +962,13 @@ class KukajDownloader:
         
         # Extract media URLs (.m3u8 or .mp4)
         media_urls = self.extract_media_urls(url, source)
-
+        
         if not media_urls:
             print("❌ No video URLs found")
             return False
-
+        
+        # Stop here if we found a URL - don't try to extract again
+        
         # Prioritise according to extension / preference
         preferred_order = [
             lambda u: u.lower().endswith('.m3u8'),  # HLS first
@@ -827,6 +979,7 @@ class KukajDownloader:
 
         media_urls.sort(key=lambda u: next((i for i, f in enumerate(preferred_order) if f(u)), 999))
 
+        # Take the first URL and don't process the rest
         media_url = media_urls[0]
         print(f"📹 Using media URL: {media_url}")
         
@@ -877,23 +1030,27 @@ class KukajDownloader:
             if self.page:
                 try:
                     self.page.close()
-                except:
+                except Exception:
                     pass
+
             if self.context:
                 try:
                     self.context.close()
-                except:
+                except Exception:
                     pass
+
             if self.browser:
                 try:
                     self.browser.close()
-                except:
+                except Exception:
                     pass
+
             if self.playwright:
                 try:
                     self.playwright.stop()
-                except:
+                except Exception:
                     pass
+
             print("🧹 Browser closed and resources cleaned up")
         except Exception as e:
             print(f"⚠️ Error during cleanup: {e}")

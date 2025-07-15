@@ -144,26 +144,39 @@ class WebDownloader(KukajDownloader):
     def emit_progress(self, message, status="info"):
         """Emit progress updates to the web interface"""
         try:
-            # Emit to the specific session
-            socketio.emit('download_progress', {
-                'message': message,
-                'status': status,
-                'timestamp': datetime.now().strftime('%H:%M:%S')
-            }, room=self.session_id)
-            
-            # Also broadcast to all clients for mini panel sync
-            socketio.emit('download_progress_global', {
-                'message': message,
-                'status': status,
-                'session_id': self.session_id,
-                'timestamp': datetime.now().strftime('%H:%M:%S')
-            })
-            
-            # Track errors
+            # Emit to the specific client session
+            socketio.emit(
+                'download_progress',
+                {
+                    'message': message,
+                    'status': status,
+                    'timestamp': datetime.now().strftime('%H:%M:%S'),
+                },
+                room=self.session_id,
+            )
+
+            # Broadcast to all clients for the mini-status panel
+            socketio.emit(
+                'download_progress_global',
+                {
+                    'message': message,
+                    'status': status,
+                    'session_id': self.session_id,
+                    'timestamp': datetime.now().strftime('%H:%M:%S'),
+                },
+            )
+
+            # Basic error-counter logic
             if status == "error":
                 self.error_count += 1
                 if self.error_count >= self.max_errors:
-                    self.emit_progress("❌ Too many errors, stopping download", "error")
+                    socketio.emit(
+                        'download_error_global',
+                        {
+                            'message': 'Too many errors, download aborted',
+                            'session_id': self.session_id,
+                        },
+                    )
                     raise Exception("Maximum error count reached")
         except Exception as e:
             print(f"❌ Failed to emit progress: {e}")
@@ -227,18 +240,19 @@ class WebDownloader(KukajDownloader):
                                 self.emit_progress("⚠️ Browser reinitialization failed, continuing with existing browser", "warning")
                 
                 self.emit_progress("🔄 Starting download process...", "info")
-                
+            
                 # Normalize the URL
                 normalized_url, was_changed = normalize_kukaj_url(url)
                 if was_changed:
                     self.emit_progress(f"🔄 URL normalized from {url}", "info")
                     self.emit_progress(f"📍 Using: {normalized_url}", "success")
                     url = normalized_url
-                
+
                 # Extract media URLs (m3u8 or mp4)
                 self.emit_progress("🔍 Extracting video URLs...", "info")
-                media_urls = self.extract_media_urls(url, source)
-
+                # Use the parent class method to avoid recursion
+                media_urls = super().extract_media_urls(url, source)
+            
                 if not media_urls:
                     if retry_count < max_retries:
                         retry_count += 1
@@ -249,7 +263,8 @@ class WebDownloader(KukajDownloader):
                         # Only attempt TAP fallback after ALL retries have failed
                         if source and source.upper() == 'TAP':
                             self.emit_progress("⚠️ TAP failed after all retries, attempting MON fallback (m3u8 → mp4)...", "warning")
-                            media_urls = self.extract_media_urls(url, 'MON')
+                            # Use the parent class method to avoid recursion
+                            media_urls = super().extract_media_urls(url, 'MON')
                             if media_urls:
                                 # Force convert_to_mp4 for fallback
                                 convert_to_mp4 = True
@@ -269,7 +284,8 @@ class WebDownloader(KukajDownloader):
                         if not media_urls:
                             self.emit_progress("❌ No video URLs found after all retries and fallback attempts", "error")
                             return False
-
+                
+                # If we got here, we have media URLs
                 self.emit_progress(f"✅ Found {len(media_urls)} video URL(s)", "success")
 
                 # Prefer .m3u8 over .mp4
@@ -306,7 +322,7 @@ class WebDownloader(KukajDownloader):
                 else:
                     self.emit_progress(f"❌ Fatal error after all retries: {str(e)}", "error")
                     return False
-        
+            
         # ------------------------------------------------------------
         # Decide whether to download server-side or just send link
         # ------------------------------------------------------------
@@ -318,12 +334,18 @@ class WebDownloader(KukajDownloader):
                 if success:
                     self.emit_progress(f"🎉 Download completed: {output_filename}", "success")
                     # Notify front-end with link to the newly stored mp4 so other devices can grab it
-                    file_link = f"/api/download-file/{os.path.basename(output_filename)}"
+                    # Safely handle basename with None check
+                    file_basename = os.path.basename(output_filename) if output_filename else "video.mp4"
+                    file_link = f"/api/download-file/{file_basename}"
                     # Send to specific session
-                    socketio.emit('media_url', {
-                        'url': file_link,
-                        'type': 'mp4'
-                    }, room=self.session_id)
+                    socketio.emit(
+                        'media_url', 
+                        {
+                            'url': file_link,
+                            'type': 'mp4'
+                        }, 
+                        to=self.session_id
+                    )
                     # Also broadcast to all clients for sync
                     socketio.emit('media_url_global', {
                         'url': file_link,
@@ -338,10 +360,14 @@ class WebDownloader(KukajDownloader):
                 lower_url = media_url.lower()
                 file_type = 'mp4' if ('.mp4' in lower_url or 'streamtape.com' in lower_url or 'tapecontent' in lower_url) else 'm3u8'
                 # Send to specific session
-                socketio.emit('media_url', {
-                    'url': media_url,
-                    'type': file_type
-                }, room=self.session_id)
+                socketio.emit(
+                    'media_url', 
+                    {
+                        'url': media_url,
+                        'type': file_type
+                    }, 
+                    to=self.session_id
+                )
                 # Also broadcast to all clients for sync
                 socketio.emit('media_url_global', {
                     'url': media_url,
@@ -735,21 +761,28 @@ def start_download():
                     file_type = 'mp4' if filename_only.endswith('.mp4') else 'm3u8'
                     
                     # Emit to specific session
-                    socketio.emit('download_complete', {
-                        'success': success,
-                        'filename': filename_only,
-                        'original_filename': output_filename
-                    }, room=session_id)
-                    
+                    socketio.emit(
+                        'download_complete',
+                        {
+                            'success': success,
+                            'filename': filename_only,
+                            'original_filename': output_filename,
+                        },
+                        room=session_id,
+                    )
+
                     # Also broadcast to all clients for sync with download URL
-                    socketio.emit('download_complete_global', {
-                        'success': success,
-                        'filename': filename_only,
-                        'original_filename': output_filename,
-                        'session_id': session_id,
-                        'download_url': download_url,
-                        'file_type': file_type
-                    })
+                    socketio.emit(
+                        'download_complete_global',
+                        {
+                            'success': success,
+                            'filename': filename_only,
+                            'original_filename': output_filename,
+                            'session_id': session_id,
+                            'download_url': download_url,
+                            'file_type': file_type,
+                        },
+                    )
                 
                 # Also broadcast file list update to all clients
                 socketio.emit('files_updated', {
